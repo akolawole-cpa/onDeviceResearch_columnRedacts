@@ -1,0 +1,36 @@
+# Statistical Tests Configuration
+
+# Significance level
+significance_level: 0.05
+
+# Test metrics to compare between groups
+test_metrics:
+  - avg_task_time
+  - suspicious_fast_rate
+  - total_tasks
+  - tasks_per_day
+  - task_time_cv
+  - task_ppm_cv
+  - avg_quality
+  - avg_risk
+  - night_task_rate
+  - weekend_task_rate
+  - avg_task_pointsPerMin
+
+# Group comparison settings
+group_comparison:
+  group_col: "has_wonky_tasks"
+  group1_value: 1  # Wonky users
+  group2_value: 0  # Non-wonky users
+
+# Threshold analysis settings
+threshold_analysis:
+  default_bins: 10
+  quantile_method: "first"
+
+# Effect size thresholds (for interpretation)
+effect_size_thresholds:
+  small: 0.2
+  medium: 0.5
+  large: 0.8
+

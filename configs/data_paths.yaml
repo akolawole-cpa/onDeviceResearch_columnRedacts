@@ -1,0 +1,30 @@
+# Data Paths Configuration
+
+# Base paths
+base_path: "/mnt/delta/"
+bronze_path: "/mnt/delta/bronze/"
+silver_path: "/mnt/delta/silver/"
+gold_path: "/mnt/delta/gold/"
+checkpoint_path: "/mnt/delta/checkpoints/"
+
+# Project repository path for wonky studies
+project_repository_path: "/mnt/project-repository-prod"
+
+# Table names
+tables:
+  user: "user"
+  task_complete: "task_complete"
+  respondent_info: "respondent_info"
+  task: "task"
+
+# Output file paths
+output_files:
+  user_info_df: "user_info_df_pullcomplete.parquet"
+  wonky_user_counts: "wonky_user_counts_pullcomplete.parquet"
+
+# Data filters
+filters:
+  country: "GB"
+  min_date: "2025-10-10"
+  task_origin: "odr"
+

@@ -1,0 +1,82 @@
+# Models Configuration
+
+# Target fraud rate
+target_fraud_rate: 0.05  # 5%
+
+# Anomaly Detection Models
+anomaly_detection:
+  isolation_forest:
+    contamination: 0.1  # Expected proportion of outliers
+    n_estimators: 100
+    max_samples: "auto"
+    random_state: 42
+  
+  local_outlier_factor:
+    n_neighbors: 20
+    contamination: 0.1
+  
+  one_class_svm:
+    nu: 0.1  # Upper bound on fraction of outliers
+    kernel: "rbf"
+    gamma: "scale"
+
+# Clustering Models
+clustering:
+  kmeans:
+    n_clusters: 5
+    random_state: 42
+    n_init: 10
+  
+  dbscan:
+    eps: 0.5
+    min_samples: 5
+  
+  hierarchical:
+    n_clusters: 5
+    linkage: "ward"
+
+# Supervised Models
+supervised:
+  random_forest:
+    n_estimators: 100
+    max_depth: 20
+    min_samples_split: 5
+    min_samples_leaf: 2
+    random_state: 42
+    class_weight: "balanced"  # Handle class imbalance
+  
+  # Additional models can be added here
+  gradient_boosting:
+    n_estimators: 100
+    learning_rate: 0.1
+    max_depth: 5
+    random_state: 42
+
+# Feature Selection
+feature_selection:
+  correlation_threshold: 0.8  # Remove highly correlated features
+  importance_threshold: 0.01  # Minimum feature importance
+  use_eda_outputs: true  # Use EDA findings for feature selection
+
+# Model Evaluation
+evaluation:
+  test_size: 0.2
+  random_state: 42
+  cv_folds: 5
+  scoring_metrics:
+    - "precision"
+    - "recall"
+    - "f1"
+    - "roc_auc"
+  
+  # Fraud rate reduction tracking
+  track_fraud_rate_reduction: true
+  baseline_fraud_rate: null  # Will be calculated from data
+
+# Model Selection Criteria
+model_selection:
+  primary_metric: "f1"  # Primary metric for model selection
+  minimize_false_negatives: true  # Prioritize catching fraud
+  target_precision: 0.8  # Minimum precision required
+  target_recall: 0.7  # Minimum recall required
+

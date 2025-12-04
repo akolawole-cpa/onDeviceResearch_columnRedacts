@@ -1,0 +1,28 @@
+# Databricks Project Configuration
+
+# Project name
+name: onDeviceResearch_columnRedacts
+
+# Python version
+python: "3.9"
+
+# Dependencies
+dependencies:
+  - requirements.txt
+
+# Databricks runtime
+runtime:
+  spark_version: "13.3.x-scala2.12"
+  node_type_id: "i3.xlarge"
+
+# Notebook paths (relative to project root)
+notebooks:
+  - notebooks/respondent_data_pull_notebook.ipynb
+  - notebooks/respondent_eda_notebook2.ipynb
+  - notebooks/model_training.ipynb
+
+# Libraries (if using custom libraries)
+# libraries:
+#   - pypi:
+#       package: "package-name==version"
+
