@@ -69,8 +69,8 @@ databricks.yml.local
 .DS_Store
 Thumbs.db
 
-# Educa file
-EDUCA.md
+# Education file (should not be committed)
+EDUCATION.md
 
 # Cache
 .cache/
@@ -83,4 +83,3 @@ temp/
 
 # Misc folder (not tracked)
 misc/
-
