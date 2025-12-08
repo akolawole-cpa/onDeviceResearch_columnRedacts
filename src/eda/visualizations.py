@@ -731,8 +731,38 @@ def create_distribution_comparison(
     go.Figure
         Plotly figure with distribution comparison
     """
-    if feature not in df.columns or group_col not in df.columns:
-        raise ValueError(f"Feature '{feature}' or group column '{group_col}' not found")
+    # Check which columns are missing and provide helpful error messages
+    missing_cols = []
+    if feature not in df.columns:
+        missing_cols.append(f"feature '{feature}'")
+        # Try to find similar column names
+        similar_features = [col for col in df.columns 
+                           if feature.split('_')[0].lower() in col.lower() 
+                           or any(word in col.lower() for word in feature.split('_') if len(word) > 3)]
+        if similar_features:
+            raise ValueError(
+                f"Feature '{feature}' not found in DataFrame. "
+                f"Available similar columns: {similar_features[:10]}. "
+                f"All columns: {list(df.columns)[:30]}"
+            )
+    if group_col not in df.columns:
+        missing_cols.append(f"group column '{group_col}'")
+        # Try to find similar column names
+        similar_group_cols = [col for col in df.columns 
+                            if 'wonky' in col.lower() or 'group' in col.lower()]
+        if similar_group_cols:
+            raise ValueError(
+                f"Group column '{group_col}' not found in DataFrame. "
+                f"Available similar columns: {similar_group_cols[:10]}. "
+                f"All columns: {list(df.columns)[:30]}"
+            )
+    
+    if missing_cols:
+        missing_str = " and ".join(missing_cols)
+        raise ValueError(
+            f"{missing_str.capitalize()} not found in DataFrame. "
+            f"Available columns: {list(df.columns)[:30]}"
+        )
     
     group1_data = df[df[group_col] == group1_value][feature].dropna()
     group2_data = df[df[group_col] == group2_value][feature].dropna()

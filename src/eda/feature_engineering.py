@@ -74,8 +74,11 @@ def create_task_speed_features(
     df["is_very_slow"] = (df["task_time_minutes"] > very_slow_threshold / 60).astype(int)
     
     # Points per minute
+    # Protect against division by zero (tasks with 0 time would produce inf/nan)
     if "task_points" in df.columns:
-        df["task_points_perMinute"] = df["task_points"] / df["task_time_minutes"]
+        df["task_points_perMinute"] = (
+            df["task_points"] / df["task_time_minutes"].replace(0, np.nan)
+        )
     
     return df
 
@@ -238,19 +241,66 @@ def create_respondent_behavioral_features(
     velocity_bins = config.get("velocity_bins", [0, 1, 3, 5, 10, np.inf])
     velocity_labels = config.get("velocity_labels", ["Very_Low", "Low", "Medium", "High", "Very_High"])
     
+    # Convert string 'inf' from YAML to np.inf for pandas compatibility
+    # Also ensure all values are numeric and bins are monotonically increasing
+    if isinstance(velocity_bins, list):
+        converted_bins = []
+        for x in velocity_bins:
+            if isinstance(x, str) and x.lower() in ['inf', 'infinity']:
+                converted_bins.append(np.inf)
+            elif isinstance(x, (int, float)):
+                converted_bins.append(float(x))
+            else:
+                # Try to convert to float, fallback to np.inf if fails
+                try:
+                    converted_bins.append(float(x))
+                except (ValueError, TypeError):
+                    converted_bins.append(np.inf)
+        velocity_bins = converted_bins
+    
+    # Ensure bins are monotonically increasing (safety check)
+    # Convert to list of floats, remove duplicates while preserving order, then sort
+    seen = set()
+    unique_bins = []
+    for x in velocity_bins:
+        if x not in seen:
+            seen.add(x)
+            unique_bins.append(x)
+    velocity_bins = sorted(unique_bins)  # Sort to ensure monotonic increase
+    
     if "tasks_per_day" in respondent_features.columns:
-        respondent_features["velocity_tier"] = pd.cut(
-            respondent_features["tasks_per_day"],
-            bins=velocity_bins,
-            labels=velocity_labels,
-        )
+        try:
+            respondent_features["velocity_tier"] = pd.cut(
+                respondent_features["tasks_per_day"],
+                bins=velocity_bins,
+                labels=velocity_labels,
+            )
+        except ValueError as e:
+            # If bins still fail, use default bins
+            print(f"Warning: velocity_bins conversion failed, using default bins. Error: {e}")
+            velocity_bins = [0, 1, 3, 5, 10, np.inf]
+            respondent_features["velocity_tier"] = pd.cut(
+                respondent_features["tasks_per_day"],
+                bins=velocity_bins,
+                labels=velocity_labels,
+            )
     
     if "avg_task_pointsPerMin" in respondent_features.columns:
-        respondent_features["velocity_tier(pointsPerMinute)"] = pd.cut(
-            respondent_features["avg_task_pointsPerMin"],
-            bins=velocity_bins,
-            labels=velocity_labels,
-        )
+        try:
+            respondent_features["velocity_tier(pointsPerMinute)"] = pd.cut(
+                respondent_features["avg_task_pointsPerMin"],
+                bins=velocity_bins,
+                labels=velocity_labels,
+            )
+        except ValueError as e:
+            # If bins still fail, use default bins
+            print(f"Warning: velocity_bins conversion failed for pointsPerMinute, using default bins. Error: {e}")
+            velocity_bins = [0, 1, 3, 5, 10, np.inf]
+            respondent_features["velocity_tier(pointsPerMinute)"] = pd.cut(
+                respondent_features["avg_task_pointsPerMin"],
+                bins=velocity_bins,
+                labels=velocity_labels,
+            )
     
     return respondent_features
 
