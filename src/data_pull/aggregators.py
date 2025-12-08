@@ -5,7 +5,7 @@ Functions for aggregating data at different levels.
 """
 
 from pyspark.sql import DataFrame
-from pyspark.sql.functions import count, F
+from pyspark.sql.functions import count, unix_timestamp
 from pyspark.sql.window import Window
 from functools import reduce
 from typing import List, Optional
@@ -47,7 +47,7 @@ def enrich_user_info_with_task_counts(
         user_info_df
         .withColumn(
             "task_time_taken_s",
-            F.unix_timestamp(date_completed_col) - F.unix_timestamp(date_created_col)
+            unix_timestamp(date_completed_col) - unix_timestamp(date_created_col)
         )
         .withColumn(
             "task_completed",
@@ -116,9 +116,18 @@ def aggregate_wonky_respondent_summary(
     return wonky_respondent_df
 
 
+def _get_mode_value(series):
+    """Helper function to get mode value from a series."""
+    mode_values = series.mode()
+    if len(mode_values) > 0:
+        return mode_values.iloc[0]
+    else:
+        return series.iloc[0] if len(series) > 0 else None
+
+
 def create_wonky_respondent_summary(
     wonky_respondent_df: pd.DataFrame,
-    respondent_id_col: str = "balance_respondentPk"
+    respondent_id_col: str = "respondent_pk"
 ) -> pd.DataFrame:
     """
     Create summary statistics for wonky respondents.
@@ -135,18 +144,33 @@ def create_wonky_respondent_summary(
     pd.DataFrame
         Summary DataFrame with aggregated metrics
     """
+    # Build aggregation dictionary dynamically based on available columns
+    agg_dict = {
+        'task_pk': ['count', 'nunique'],
+    }
+    
+    # Count unique UUIDs (studies) per respondent if uuid column exists
+    if 'uuid' in wonky_respondent_df.columns:
+        agg_dict['uuid'] = 'nunique'  # Count unique studies
+    elif 'wonky_study_count' in wonky_respondent_df.columns:
+        agg_dict['wonky_study_count'] = 'sum'
+    
+    # Add mode aggregations for categorical columns (only if they exist)
+    # For mode, we'll aggregate first, then calculate mode separately to avoid naming issues
+    categorical_cols = ['survey_pk', 'platform_name', 'hardware_version', 
+                       'yob', 'survey_locale', 'exposure_band']
+    
+    # Store which categorical columns we're aggregating
+    categorical_cols_to_process = [col for col in categorical_cols if col in wonky_respondent_df.columns]
+    
+    # For now, use 'first' as a proxy (we'll calculate mode after if needed)
+    # Or we can use the helper function - pandas should preserve column names
+    for col in categorical_cols_to_process:
+        agg_dict[col] = _get_mode_value
+    
     summary = (
         wonky_respondent_df.groupby(respondent_id_col)
-        .agg({
-            'task_pk': ['count', 'nunique'],
-            'wonky_study_count': 'sum',
-            'survey_pk': lambda x: x.mode()[0] if len(x.mode()) > 0 else x.iloc[0],
-            'platform_name': lambda x: x.mode()[0] if len(x.mode()) > 0 else x.iloc[0],
-            'hardware_version': lambda x: x.mode()[0] if len(x.mode()) > 0 else x.iloc[0],
-            'yob': lambda x: x.mode()[0] if len(x.mode()) > 0 else x.iloc[0],
-            'survey_locale': lambda x: x.mode()[0] if len(x.mode()) > 0 else x.iloc[0],
-            'exposure_band': lambda x: x.mode()[0] if len(x.mode()) > 0 else x.iloc[0],
-        })
+        .agg(agg_dict)
         .reset_index()
     )
     
@@ -157,18 +181,45 @@ def create_wonky_respondent_summary(
     ]
     
     # Rename columns
-    rename_dict = {
-        'balance_respondentPk': 'balance_respondentPk',
-        'task_pk_count': 'wonky_task_instances',
-        'task_pk_nunique': 'wonky_unique_tasks',
-        'wonky_study_count_sum': 'total_wonky_studies',
-        'survey_pk_<lambda>': 'survey_pk',
-        'platform_name_<lambda>': 'platform_name',
-        'hardware_version_<lambda>': 'hardware_version',
-        'yob_<lambda>': 'yob',
-        'survey_locale_<lambda>': 'survey_locale',
-        'exposure_band_<lambda>': 'exposure_band',
-    }
+    rename_dict = {}
+    
+    # Rename respondent ID column
+    if respondent_id_col in summary.columns:
+        rename_dict[respondent_id_col] = 'balance_respondentPk'
+    
+    # Rename task columns
+    if 'task_pk_count' in summary.columns:
+        rename_dict['task_pk_count'] = 'wonky_task_instances'
+    if 'task_pk_nunique' in summary.columns:
+        rename_dict['task_pk_nunique'] = 'wonky_unique_tasks'
+    
+    # Rename study count column (could be uuid_nunique or wonky_study_count_sum)
+    if 'uuid_nunique' in summary.columns:
+        rename_dict['uuid_nunique'] = 'total_wonky_studies'
+    elif 'wonky_study_count_sum' in summary.columns:
+        rename_dict['wonky_study_count_sum'] = 'total_wonky_studies'
+    
+    # Rename categorical columns
+    # After aggregation, pandas may name columns differently (e.g., 'survey_pk_get_mode_value' or just 'survey_pk')
+    # We need to find and rename them to their simple names
+    categorical_cols_to_rename = ['survey_pk', 'platform_name', 'hardware_version', 
+                                 'yob', 'survey_locale', 'exposure_band']
+    
+    # First, check if columns already have simple names (pandas preserved them)
+    for col in categorical_cols_to_rename:
+        if col in summary.columns:
+            # Column already has correct name, no rename needed
+            continue
+        
+        # Find columns that contain this categorical column name
+        # Could be 'survey_pk', 'survey_pk_get_mode_value', 'survey_pk_<lambda>', etc.
+        matching_cols = [c for c in summary.columns 
+                         if (c.startswith(col + '_') or c == col) 
+                         and c not in rename_dict.values()]
+        
+        if matching_cols:
+            # Use the first matching column that isn't already being renamed
+            rename_dict[matching_cols[0]] = col
     
     # Only rename columns that exist
     rename_dict = {k: v for k, v in rename_dict.items() if k in summary.columns}
@@ -217,4 +268,3 @@ def calculate_wonky_task_ratio(
     )
     
     return wonky_counts
-

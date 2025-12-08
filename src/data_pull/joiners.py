@@ -98,12 +98,16 @@ def merge_wonky_data_with_user_info(
     """
     Merge wonky study data with user info DataFrame (pandas).
     
+    This function handles both task-level and respondent-level merges.
+    If task-level columns are missing from the right DataFrame, it falls back
+    to respondent-level merge (only on respondent ID).
+    
     Parameters:
     -----------
     user_info_df : pd.DataFrame
         User info DataFrame (pandas)
     wonky_respondent_df : pd.DataFrame
-        Wonky respondent DataFrame (pandas)
+        Wonky respondent DataFrame (pandas) - can be task-level or respondent-level
     left_on : list
         Column names for left DataFrame
     right_on : list
@@ -118,14 +122,84 @@ def merge_wonky_data_with_user_info(
     """
     import pandas as pd
     
+    # Validate inputs
+    if not isinstance(left_on, list) or not isinstance(right_on, list):
+        raise TypeError("left_on and right_on must be lists")
+    
+    if len(left_on) != len(right_on):
+        raise ValueError(
+            f"left_on and right_on must have the same length. "
+            f"Got {len(left_on)} and {len(right_on)}"
+        )
+    
+    # Check which columns exist in both DataFrames
+    # Build pairs of (left_col, right_col) that both exist
+    available_pairs = []
+    missing_cols = []
+    
+    for left_col, right_col in zip(left_on, right_on):
+        left_exists = left_col in user_info_df.columns
+        right_exists = right_col in wonky_respondent_df.columns
+        
+        if left_exists and right_exists:
+            available_pairs.append((left_col, right_col))
+        else:
+            missing_cols.append({
+                'left_col': left_col,
+                'right_col': right_col,
+                'left_exists': left_exists,
+                'right_exists': right_exists
+            })
+    
+    # If not all columns are available, fall back to respondent-level merge
+    if len(available_pairs) < len(right_on):
+        # Check if we have at least the respondent ID column
+        if len(available_pairs) == 0:
+            error_msg = (
+                f"None of the specified merge columns exist in both DataFrames.\n"
+                f"Requested merge columns:\n"
+            )
+            for left_col, right_col in zip(left_on, right_on):
+                left_exists = left_col in user_info_df.columns
+                right_exists = right_col in wonky_respondent_df.columns
+                error_msg += (
+                    f"  - left_on='{left_col}' (exists: {left_exists}), "
+                    f"right_on='{right_col}' (exists: {right_exists})\n"
+                )
+            error_msg += (
+                f"\nAvailable columns in user_info_df: {list(user_info_df.columns)[:10]}...\n"
+                f"Available columns in wonky_respondent_df: {list(wonky_respondent_df.columns)[:10]}..."
+            )
+            raise ValueError(error_msg)
+        
+        # Fall back to respondent-level merge (use first available pair)
+        left_on_actual = [available_pairs[0][0]]  # Just respondent ID from left
+        right_on_actual = [available_pairs[0][1]]  # Just respondent ID from right
+        
+        # Warn if we're falling back
+        if len(right_on) > 1:
+            missing_info = missing_cols[0] if missing_cols else {}
+            print(
+                f"Warning: Task-level merge columns not available. "
+                f"Missing: left_col='{missing_info.get('left_col', 'N/A')}' "
+                f"(exists: {missing_info.get('left_exists', False)}), "
+                f"right_col='{missing_info.get('right_col', 'N/A')}' "
+                f"(exists: {missing_info.get('right_exists', False)}).\n"
+                f"Falling back to respondent-level merge on '{left_on_actual[0]}' ↔ '{right_on_actual[0]}'."
+            )
+    else:
+        # All columns available, use full merge
+        left_on_actual = [pair[0] for pair in available_pairs]
+        right_on_actual = [pair[1] for pair in available_pairs]
+    
+    # Perform the merge
     merged = user_info_df.merge(
         wonky_respondent_df,
-        left_on=left_on,
-        right_on=right_on,
+        left_on=left_on_actual,
+        right_on=right_on_actual,
         how=how,
         suffixes=('', '_wonky'),
         indicator=True
     )
     
     return merged
-

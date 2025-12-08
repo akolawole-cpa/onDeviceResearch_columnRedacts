@@ -17,14 +17,13 @@ tables:
   respondent_info: "respondent_info"
   task: "task"
 
-# Output file paths
-output_files:
-  user_info_df: "user_info_df_pullcomplete.parquet"
-  wonky_user_counts: "wonky_user_counts_pullcomplete.parquet"
+# # Output file paths (saved in misc folder)
+# output_files:
+#   user_info_df: "dbfs:/FileStore/misc/user_info_df_pullcomplete.parquet"
+#   wonky_user_counts: "dbfs:/FileStore/misc/wonky_user_counts_pullcomplete.parquet"
 
 # Data filters
 filters:
   country: "GB"
   min_date: "2025-10-10"
   task_origin: "odr"
-
