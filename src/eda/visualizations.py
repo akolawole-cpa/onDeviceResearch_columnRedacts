@@ -8,6 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
+import numpy as np
 from typing import Optional, Dict, List
 
 
@@ -387,6 +388,406 @@ def create_comparison_subplots(
         height=300 * n_rows,
         showlegend=False
     )
+    
+    return fig
+
+
+def create_temporal_breakdown_summary(
+    df: pd.DataFrame,
+    temporal_features: List[str],
+    group_col: str = "wonky_study_count",
+    group_threshold: float = 0
+) -> str:
+    """
+    Create formatted text summary showing percentages for temporal features.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with temporal features and group column
+    temporal_features : List[str]
+        List of temporal feature column names
+    group_col : str
+        Column name for grouping (default: "wonky_study_count")
+    group_threshold : float
+        Threshold for determining wonky vs non-wonky groups
+        
+    Returns:
+    --------
+    str
+        Formatted summary string
+    """
+    summary_lines = ["Temporal features created:"]
+    
+    for feature in temporal_features:
+        if feature not in df.columns:
+            continue
+            
+        # Calculate percentages
+        all_pct = df[feature].mean() * 100
+        
+        # Wonky group (group_col > threshold)
+        wonky_mask = df[group_col] > group_threshold if group_col in df.columns else pd.Series([False] * len(df))
+        if wonky_mask.sum() > 0:
+            wonky_pct = df.loc[wonky_mask, feature].mean() * 100
+        else:
+            wonky_pct = 0.0
+        
+        # Non-wonky group (group_col <= threshold or NaN)
+        non_wonky_mask = ~wonky_mask if group_col in df.columns else pd.Series([True] * len(df))
+        if non_wonky_mask.sum() > 0:
+            non_wonky_pct = df.loc[non_wonky_mask, feature].mean() * 100
+        else:
+            non_wonky_pct = 0.0
+        
+        # Format feature name for display
+        feature_display = feature.replace('_', ' ').title()
+        if feature == 'is_weekend':
+            feature_display = "Weekend tasks"
+        elif feature == 'is_night':
+            feature_display = "Night tasks (10 PM - 6 AM)"
+        elif feature == 'is_business_hour':
+            feature_display = "Business hour tasks (9 AM - 5 PM)"
+        elif feature == 'is_business_hour_weekday':
+            feature_display = "Business hour tasks weekday"
+        elif feature == 'is_business_hour_weekend':
+            feature_display = "Business hour tasks weekend"
+        
+        summary_lines.append(f"  - {feature_display}: {all_pct:.1f}%")
+        summary_lines.append(f"    * All tasks: {all_pct:.1f}%")
+        summary_lines.append(f"    * Wonky study tasks (wonky_study_count > 0): {wonky_pct:.1f}%")
+        summary_lines.append(f"    * Non-wonky study tasks (wonky_study_count = 0): {non_wonky_pct:.1f}%")
+    
+    return "\n".join(summary_lines)
+
+
+def create_chi_squared_bar_chart(
+    test_results_df: pd.DataFrame,
+    chi2_col: str = "chi2",
+    p_value_col: str = "chi_p_value",
+    significance_level: float = 0.01,
+    title: str = "Chi-Squared Statistic by Temporal Feature",
+    xaxis_title: str = "Temporal Feature",
+    yaxis_title: str = "Chi-Squared Statistic"
+) -> go.Figure:
+    """
+    Create bar chart of chi-squared statistics by temporal feature.
+    
+    Parameters:
+    -----------
+    test_results_df : pd.DataFrame
+        DataFrame with temporal features as index and chi2/p_value columns
+    chi2_col : str
+        Column name for chi-squared statistic
+    p_value_col : str
+        Column name for p-value
+    significance_level : float
+        Significance level for coloring bars
+    title : str
+        Chart title
+    xaxis_title : str
+        X-axis title
+    yaxis_title : str
+        Y-axis title
+        
+    Returns:
+    --------
+    go.Figure
+        Plotly figure with chi-squared bar chart
+    """
+    # Prepare data
+    if test_results_df.index.name is None:
+        features = test_results_df.index.tolist()
+    else:
+        features = test_results_df.index.tolist()
+    
+    chi2_values = test_results_df[chi2_col].values
+    p_values = test_results_df[p_value_col].values if p_value_col in test_results_df.columns else None
+    
+    # Color bars by significance if p-values available
+    if p_values is not None:
+        colors = ['indianred' if p < significance_level else 'lightcoral' for p in p_values]
+    else:
+        colors = 'indianred'
+    
+    fig = go.Figure(go.Bar(
+        x=features,
+        y=chi2_values,
+        text=[f"{x:.2f}" for x in chi2_values],
+        textposition="inside",
+        marker_color=colors
+    ))
+    
+    fig.update_layout(
+        title=title,
+        yaxis=dict(title=yaxis_title),
+        xaxis=dict(title=xaxis_title)
+    )
+    
+    return fig
+
+
+def create_dual_axis_statistical_chart(
+    test_results_df: pd.DataFrame,
+    count_diff_col: str = "count_difference_nrm",
+    t_stat_col: str = "t_stat_welch",
+    title: str = "Ave Wonky Count Difference & Welch's t-statistic by Feature",
+    xaxis_title: str = "Feature",
+    y1_title: str = "Count Difference (Wonky - Non-wonky)",
+    y2_title: str = "Welch's t-statistic"
+) -> go.Figure:
+    """
+    Create dual-axis chart: bars for count differences, line for Welch's t-statistic.
+    
+    Parameters:
+    -----------
+    test_results_df : pd.DataFrame
+        DataFrame with features as index and count_diff/t_stat columns
+    count_diff_col : str
+        Column name for count difference (normalized)
+    t_stat_col : str
+        Column name for Welch's t-statistic
+    title : str
+        Chart title
+    xaxis_title : str
+        X-axis title
+    y1_title : str
+        Left Y-axis title (for bars)
+    y2_title : str
+        Right Y-axis title (for line)
+        
+    Returns:
+    --------
+    go.Figure
+        Plotly figure with dual-axis chart
+    """
+    # Prepare data
+    if test_results_df.index.name is None:
+        features = test_results_df.index.tolist()
+    else:
+        features = test_results_df.index.tolist()
+    
+    count_diff = test_results_df[count_diff_col].values
+    t_stat = test_results_df[t_stat_col].values
+    
+    fig = go.Figure()
+    
+    # Add bar chart for count differences (left y-axis)
+    fig.add_trace(go.Bar(
+        x=features,
+        y=count_diff,
+        name='Count Difference',
+        marker_color='steelblue',
+        yaxis='y1'
+    ))
+    
+    # Add line chart for Welch's t-statistic (right y-axis)
+    fig.add_trace(go.Scatter(
+        x=features,
+        y=t_stat,
+        name="Welch's t-statistic",
+        mode='lines+markers',
+        marker=dict(color="darkorange", size=10),
+        line=dict(color="darkorange", width=2),
+        yaxis='y2'
+    ))
+    
+    fig.update_layout(
+        title=title,
+        xaxis=dict(title=xaxis_title),
+        yaxis=dict(
+            title=y1_title,
+            titlefont=dict(color='steelblue'),
+            tickfont=dict(color='steelblue')
+        ),
+        yaxis2=dict(
+            title=y2_title,
+            titlefont=dict(color='darkorange'),
+            tickfont=dict(color='darkorange'),
+            overlaying='y',
+            side='right'
+        ),
+        legend=dict(x=0.01, y=0.99),
+        hovermode='x unified'
+    )
+    
+    return fig
+
+
+def create_feature_breakdown_table(
+    df: pd.DataFrame,
+    feature_col: str,
+    group_col: str,
+    group1_value: int = 1,
+    group2_value: int = 0,
+    metrics: Optional[List[str]] = None
+) -> pd.DataFrame:
+    """
+    Create summary table showing wonky vs non-wonky breakdowns by feature.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with feature and group columns
+    feature_col : str
+        Column name for the feature to analyze
+    group_col : str
+        Column name for group labels
+    group1_value : int
+        Value for first group (e.g., 1 for wonky)
+    group2_value : int
+        Value for second group (e.g., 0 for non-wonky)
+    metrics : List[str], optional
+        List of metric columns to summarize. If None, uses numeric columns.
+        
+    Returns:
+    --------
+    pd.DataFrame
+        Summary DataFrame with breakdown statistics
+    """
+    if feature_col not in df.columns or group_col not in df.columns:
+        return pd.DataFrame()
+    
+    group1 = df[df[group_col] == group1_value]
+    group2 = df[df[group_col] == group2_value]
+    
+    if metrics is None:
+        # Use numeric columns by default
+        metrics = df.select_dtypes(include=[np.number]).columns.tolist()
+        metrics = [m for m in metrics if m not in [feature_col, group_col]]
+    
+    summary_data = []
+    
+    for metric in metrics:
+        if metric not in df.columns:
+            continue
+        
+        group1_values = group1[metric].dropna()
+        group2_values = group2[metric].dropna()
+        
+        if len(group1_values) == 0 or len(group2_values) == 0:
+            continue
+        
+        summary_data.append({
+            'metric': metric,
+            'wonky_mean': group1_values.mean(),
+            'wonky_median': group1_values.median(),
+            'wonky_std': group1_values.std(),
+            'wonky_count': len(group1_values),
+            'non_wonky_mean': group2_values.mean(),
+            'non_wonky_median': group2_values.median(),
+            'non_wonky_std': group2_values.std(),
+            'non_wonky_count': len(group2_values),
+            'mean_difference': group1_values.mean() - group2_values.mean(),
+            'median_difference': group1_values.median() - group2_values.median()
+        })
+    
+    return pd.DataFrame(summary_data)
+
+
+def create_distribution_comparison(
+    df: pd.DataFrame,
+    feature: str,
+    group_col: str,
+    group1_value: int = 1,
+    group2_value: int = 0,
+    plot_type: str = "histogram",
+    group1_name: str = "Wonky",
+    group2_name: str = "Non-Wonky",
+    title: Optional[str] = None,
+    nbins: int = 50,
+    opacity: float = 0.7
+) -> go.Figure:
+    """
+    Create histogram or box plot comparing wonky vs non-wonky distributions.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with feature and group columns
+    feature : str
+        Column name for the feature to plot
+    group_col : str
+        Column name for group labels
+    group1_value : int
+        Value for first group
+    group2_value : int
+        Value for second group
+    plot_type : str
+        Type of plot: "histogram" or "box"
+    group1_name : str
+        Display name for first group
+    group2_name : str
+        Display name for second group
+    title : str, optional
+        Plot title
+    nbins : int
+        Number of bins for histogram
+    opacity : float
+        Opacity for histogram overlay
+        
+    Returns:
+    --------
+    go.Figure
+        Plotly figure with distribution comparison
+    """
+    if feature not in df.columns or group_col not in df.columns:
+        raise ValueError(f"Feature '{feature}' or group column '{group_col}' not found")
+    
+    group1_data = df[df[group_col] == group1_value][feature].dropna()
+    group2_data = df[df[group_col] == group2_value][feature].dropna()
+    
+    if plot_type == "histogram":
+        fig = go.Figure()
+        
+        fig.add_trace(go.Histogram(
+            x=group1_data,
+            name=group1_name,
+            opacity=opacity,
+            nbinsx=nbins,
+            marker_color='crimson'
+        ))
+        
+        fig.add_trace(go.Histogram(
+            x=group2_data,
+            name=group2_name,
+            opacity=opacity,
+            nbinsx=nbins,
+            marker_color='steelblue'
+        ))
+        
+        fig.update_layout(
+            barmode='overlay',
+            title=title or f"{feature} Distribution: {group1_name} vs {group2_name}",
+            xaxis_title=feature,
+            yaxis_title="Frequency"
+        )
+        
+    elif plot_type == "box":
+        fig = go.Figure()
+        
+        fig.add_trace(go.Box(
+            y=group1_data,
+            name=group1_name,
+            marker_color='crimson',
+            boxmean='sd'
+        ))
+        
+        fig.add_trace(go.Box(
+            y=group2_data,
+            name=group2_name,
+            marker_color='steelblue',
+            boxmean='sd'
+        ))
+        
+        fig.update_layout(
+            title=title or f"{feature} Distribution: {group1_name} vs {group2_name}",
+            yaxis_title=feature,
+            xaxis_title="Group"
+        )
+    
+    else:
+        raise ValueError(f"plot_type must be 'histogram' or 'box', got '{plot_type}'")
     
     return fig
 

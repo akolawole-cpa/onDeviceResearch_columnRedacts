@@ -6,7 +6,7 @@ Functions for performing statistical hypothesis tests and analysis.
 
 import pandas as pd
 import numpy as np
-from scipy.stats import mannwhitneyu, ttest_ind
+from scipy.stats import mannwhitneyu, ttest_ind, chi2_contingency
 from typing import List, Dict, Optional, Tuple
 
 
@@ -411,4 +411,194 @@ def format_hypothesis_results(
         )
     
     return results
+
+
+def perform_chi_square_tests(
+    df: pd.DataFrame,
+    temporal_features: List[str],
+    group_var: str = "wonky_study_count",
+    significance_level: float = 0.01
+) -> pd.DataFrame:
+    """
+    Perform chi-squared tests for independence between temporal features and group variable.
+    
+    Tests whether temporal features are independent of the group variable (wonky vs non-wonky).
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with temporal features and group variable
+    temporal_features : List[str]
+        List of temporal feature column names to test
+    group_var : str
+        Column name for grouping variable
+    significance_level : float
+        Significance level for determining significance
+        
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with chi2, p_value, and significance for each feature
+    """
+    results = []
+    
+    # Prepare group variable (binary: >0 vs =0 or NaN)
+    if group_var in df.columns:
+        df_test = df.copy()
+        df_test[group_var] = df_test[group_var].fillna(0)
+        df_test['group_binary'] = (df_test[group_var] > 0).astype(int)
+    else:
+        return pd.DataFrame()
+    
+    for feature in temporal_features:
+        if feature not in df_test.columns:
+            continue
+        
+        # Create contingency table
+        contingency_table = pd.crosstab(
+            df_test['group_binary'],
+            df_test[feature]
+        )
+        
+        # Check if we have enough data
+        if contingency_table.shape[0] < 2 or contingency_table.shape[1] < 2:
+            continue
+        
+        # Perform chi-squared test
+        try:
+            chi2, p_value, dof, expected = chi2_contingency(contingency_table)
+            
+            results.append({
+                'feature': feature,
+                'chi2': chi2,
+                'chi_p_value': p_value,
+                'dof': dof,
+                'significant': p_value < significance_level
+            })
+        except Exception as e:
+            # Skip if test fails (e.g., insufficient data)
+            continue
+    
+    results_df = pd.DataFrame(results)
+    
+    if len(results_df) > 0:
+        results_df = results_df.set_index('feature')
+        results_df = results_df.sort_values('chi2', ascending=False)
+    
+    return results_df
+
+
+def compare_demographic_groups(
+    df: pd.DataFrame,
+    demographic_col: str,
+    target_col: str = "wonky_task_ratio",
+    min_group_size: int = 10,
+    significance_level: float = 0.05
+) -> pd.DataFrame:
+    """
+    Compare wonky task rates across demographic groups using Mann-Whitney U and Welch's t-test.
+    
+    For each pair of demographic groups, performs statistical tests to identify
+    significant differences in wonky task rates.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with demographic and target columns
+    demographic_col : str
+        Column name for demographic grouping (e.g., 'platform_name', 'hardware_version', 'survey_locale')
+    target_col : str
+        Column name for target metric (e.g., 'wonky_task_ratio' or 'has_wonky_tasks')
+    min_group_size : int
+        Minimum number of observations required per group for testing
+    significance_level : float
+        Significance level for determining significance
+        
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with comparison results for each group pair
+    """
+    if demographic_col not in df.columns or target_col not in df.columns:
+        return pd.DataFrame()
+    
+    # Get unique groups
+    df_clean = df[[demographic_col, target_col]].dropna()
+    
+    if len(df_clean) == 0:
+        return pd.DataFrame()
+    
+    groups = df_clean[demographic_col].unique()
+    
+    if len(groups) < 2:
+        return pd.DataFrame()
+    
+    results = []
+    
+    # Compare each pair of groups
+    for i, group1 in enumerate(groups):
+        for group2 in groups[i+1:]:
+            group1_data = df_clean[df_clean[demographic_col] == group1][target_col]
+            group2_data = df_clean[df_clean[demographic_col] == group2][target_col]
+            
+            # Check minimum group size
+            if len(group1_data) < min_group_size or len(group2_data) < min_group_size:
+                continue
+            
+            # Perform Mann-Whitney U test
+            mw_statistic, mw_p_value = perform_mannwhitney_test(
+                group1_data,
+                group2_data,
+                alternative='two-sided'
+            )
+            
+            # Perform Welch's t-test
+            welch_statistic, welch_p_value = perform_welch_ttest(
+                group1_data,
+                group2_data,
+                alternative='two-sided'
+            )
+            
+            # Calculate descriptive statistics
+            group1_mean = group1_data.mean()
+            group2_mean = group2_data.mean()
+            mean_diff = group1_mean - group2_mean
+            
+            group1_median = group1_data.median()
+            group2_median = group2_data.median()
+            median_diff = group1_median - group2_median
+            
+            # Check if tests agree
+            mw_sig = mw_p_value < significance_level if not np.isnan(mw_p_value) else False
+            welch_sig = welch_p_value < significance_level if not np.isnan(welch_p_value) else False
+            tests_agree = mw_sig == welch_sig
+            
+            results.append({
+                'demographic': demographic_col,
+                'group1': group1,
+                'group2': group2,
+                'group1_mean': group1_mean,
+                'group2_mean': group2_mean,
+                'mean_difference': mean_diff,
+                'group1_median': group1_median,
+                'group2_median': group2_median,
+                'median_difference': median_diff,
+                'group1_count': len(group1_data),
+                'group2_count': len(group2_data),
+                'mw_statistic': mw_statistic,
+                'mw_p_value': mw_p_value,
+                'mw_significant': mw_sig,
+                'welch_statistic': welch_statistic,
+                'welch_p_value': welch_p_value,
+                'welch_significant': welch_sig,
+                'tests_agree': tests_agree
+            })
+    
+    results_df = pd.DataFrame(results)
+    
+    if len(results_df) > 0:
+        # Sort by Mann-Whitney p-value
+        results_df = results_df.sort_values('mw_p_value')
+    
+    return results_df
 
