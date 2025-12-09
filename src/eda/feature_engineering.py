@@ -210,6 +210,8 @@ def create_respondent_behavioral_features(
     # Sort by respondent ID, demographics (if any), and date
     sort_cols = [respondent_id_col] + available_demographic_cols + [date_col]
     df = df.sort_values(by=sort_cols)
+
+    print(df.shape)
     
     # Aggregation dictionary for behavioral features
     agg_dict = {
@@ -244,6 +246,8 @@ def create_respondent_behavioral_features(
         .agg(filtered_agg_dict)
         .reset_index()
     )
+
+    print(respondent_features.shape)
     
     # Flatten column names
     # Aggregated columns are tuples like ('taskPk', 'count')
@@ -449,7 +453,7 @@ def add_wonky_features(
     respondent_features : pd.DataFrame
         Respondent-level features DataFrame
     wonky_studies_df : pd.DataFrame
-        DataFrame with wonky study information
+        DataFrame with wonky study information (aggregated)
     respondent_id_col : str
         Name of the respondent ID column
         
