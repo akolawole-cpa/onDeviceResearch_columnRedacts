@@ -57,13 +57,11 @@ def create_time_features(df: pd.DataFrame, date_col: str = "date_completed") -> 
 
 def create_task_speed_features(
     df: pd.DataFrame,
-    task_time_col: str = "task_time_taken",
-    suspicious_threshold: float = 30.0,
-    very_fast_threshold: float = 180.0,
-    very_slow_threshold: float = 3600.0
+    task_time_col: str = "task_time_taken_s",
+    use_std_dev: bool = True
 ) -> pd.DataFrame:
     """
-    Create task speed-related features.
+    Create task speed-related features using standard deviations.
     
     Parameters:
     -----------
@@ -71,23 +69,91 @@ def create_task_speed_features(
         DataFrame containing task time data
     task_time_col : str
         Name of the task time column (in seconds)
-    suspicious_threshold : float
-        Threshold for suspiciously fast tasks (seconds)
-    very_fast_threshold : float
-        Threshold for very fast tasks (seconds)
-    very_slow_threshold : float
-        Threshold for very slow tasks (seconds)
+    use_std_dev : bool
+        If True, use standard deviations to define thresholds. If False, use legacy hardcoded thresholds.
         
     Returns:
     --------
     pd.DataFrame
-        DataFrame with added speed features
+        DataFrame with added speed features:
+        - is_fast: 1 std dev below mean
+        - is_suspiciously_fast: 2 std dev below mean
+        - is_slow: 1 std dev above mean
+        - is_suspiciously_slow: 2 std dev above mean
     """
     df = df.copy()
+    
+    if task_time_col not in df.columns:
+        raise ValueError(f"Task time column '{task_time_col}' not found in DataFrame")
+    
+    # Calculate task time in minutes
     df["task_time_minutes"] = df[task_time_col] / 60
-    df["is_suspiciously_fast"] = (df[task_time_col] < suspicious_threshold).astype(int)
-    df["is_very_fast"] = (df[task_time_col] < very_fast_threshold).astype(int)
-    df["is_very_slow"] = (df["task_time_minutes"] > very_slow_threshold / 60).astype(int)
+    
+    if use_std_dev:
+        # Use percentiles instead of raw standard deviations to handle outliers robustly
+        # Percentiles approximate normal distribution: 
+        # - 16th percentile ≈ mean - 1σ (fast)
+        # - 2.5th percentile ≈ mean - 2σ (suspiciously fast)
+        # - 84th percentile ≈ mean + 1σ (slow)
+        # - 97.5th percentile ≈ mean + 2σ (suspiciously slow)
+        
+        # Filter out NaN and invalid values for percentile calculation
+        valid_times = df[task_time_col].dropna()
+        if len(valid_times) == 0:
+            raise ValueError(f"No valid values found in '{task_time_col}' column")
+        
+        # Check if all values are the same (would make percentiles meaningless)
+        if valid_times.nunique() == 1:
+            # If all values are the same, set all flags appropriately
+            df["is_fast"] = 0
+            df["is_suspiciously_fast"] = 0
+            df["is_slow"] = 0
+            df["is_suspiciously_slow"] = 0
+            df["is_normal_speed"] = 1  # All tasks are "normal" if they're all the same
+            df["is_very_fast"] = 0
+        else:
+            # Calculate percentiles for the entire sample
+            fast_threshold = valid_times.quantile(0.16)  # ~1 std dev below mean
+            suspiciously_fast_threshold = valid_times.quantile(0.025)  # ~2 std dev below mean
+            slow_threshold = valid_times.quantile(0.84)  # ~1 std dev above mean
+            suspiciously_slow_threshold = valid_times.quantile(0.975)  # ~2 std dev above mean
+            
+            # Also calculate mean and std for display (using trimmed data to avoid extreme outliers)
+            # Trim extreme outliers (top/bottom 1%) before calculating stats for display
+            trimmed_data = valid_times.clip(
+                lower=valid_times.quantile(0.01),
+                upper=valid_times.quantile(0.99)
+            )
+            mean_time = trimmed_data.mean()
+            std_time = trimmed_data.std()
+            
+            # Create speed flags (handle NaN values by setting to 0)
+            df["is_fast"] = (df[task_time_col] < fast_threshold).fillna(0).astype(int)
+            df["is_suspiciously_fast"] = (df[task_time_col] < suspiciously_fast_threshold).fillna(0).astype(int)
+            df["is_slow"] = (df[task_time_col] > slow_threshold).fillna(0).astype(int)
+            df["is_suspiciously_slow"] = (df[task_time_col] > suspiciously_slow_threshold).fillna(0).astype(int)
+            
+            # Normal speed: within 1 std dev of mean (between 16th and 84th percentile)
+            df["is_normal_speed"] = (
+                (df[task_time_col] >= fast_threshold) & 
+                (df[task_time_col] <= slow_threshold)
+            ).fillna(0).astype(int)
+            
+            # Store thresholds for reference (as metadata in a comment or as attributes)
+            # For backward compatibility, also create legacy column names
+            df["is_very_fast"] = df["is_fast"].copy()
+        
+        # Store calculated thresholds as attributes for potential future reference
+        # (Note: DataFrame attributes aren't preserved, but we'll use them in the notebook)
+    else:
+        # Legacy hardcoded thresholds (for backward compatibility)
+        suspicious_threshold = 30.0
+        very_fast_threshold = 180.0
+        very_slow_threshold = 3600.0
+        
+        df["is_suspiciously_fast"] = (df[task_time_col] < suspicious_threshold).astype(int)
+        df["is_very_fast"] = (df[task_time_col] < very_fast_threshold).astype(int)
+        df["is_very_slow"] = (df["task_time_minutes"] > very_slow_threshold / 60).astype(int)
     
     # Points per minute
     # Protect against division by zero (tasks with 0 time would produce inf/nan)
@@ -131,6 +197,10 @@ def create_respondent_behavioral_features(
     if config is None:
         config = {}
     
+    # Handle None demographic_cols
+    if demographic_cols is None:
+        demographic_cols = []
+    
     # Filter demographic columns to only those that exist in the dataframe
     available_demographic_cols = [
         col for col in demographic_cols 
@@ -148,6 +218,10 @@ def create_respondent_behavioral_features(
         "task_points_perMinute": ["mean", "std", "min", "max", "median"],
         "is_suspiciously_fast": "sum",
         "is_very_fast": "sum",
+        "is_fast": "sum",  # New: 1 std dev below mean
+        "is_slow": "sum",  # New: 1 std dev above mean
+        "is_suspiciously_slow": "sum",  # New: 2 std dev above mean
+        "is_normal_speed": "sum",  # New: within 1 std dev of mean (16th-84th percentile)
         "is_night": "sum",
         "is_weekend": "sum",
         "risk": ["mean", "max"],
@@ -165,7 +239,6 @@ def create_respondent_behavioral_features(
     # Group by respondent ID and demographic columns
     # Demographic columns will be preserved automatically as grouping columns
     groupby_cols = [respondent_id_col] + available_demographic_cols
-    print(groupby_cols)
     respondent_features = (
         df.groupby(groupby_cols)
         .agg(filtered_agg_dict)
@@ -183,7 +256,6 @@ def create_respondent_behavioral_features(
             # Grouping column (respondent_id_col or demographic): keep as string
             flattened_cols.append(str(col))
     respondent_features.columns = flattened_cols
-    print(respondent_features.columns)
     
     # Rename columns
     rename_dict = {
@@ -199,6 +271,10 @@ def create_respondent_behavioral_features(
         "task_time_taken_median": "median_task_time",
         "is_suspiciously_fast_sum": "suspicious_fast_count",
         "is_very_fast_sum": "very_fast_count",
+        "is_fast_sum": "fast_count",
+        "is_slow_sum": "slow_count",
+        "is_suspiciously_slow_sum": "suspiciously_slow_count",
+        "is_normal_speed_sum": "normal_speed_count",
         "is_night_sum": "night_task_count",
         "is_weekend_sum": "weekend_task_count",
         "risk_mean": "avg_risk",
@@ -223,6 +299,22 @@ def create_respondent_behavioral_features(
         if "very_fast_count" in respondent_features.columns:
             respondent_features["very_fast_rate"] = (
                 respondent_features["very_fast_count"] / respondent_features["total_tasks"]
+            )
+        if "fast_count" in respondent_features.columns:
+            respondent_features["fast_rate"] = (
+                respondent_features["fast_count"] / respondent_features["total_tasks"]
+            )
+        if "slow_count" in respondent_features.columns:
+            respondent_features["slow_rate"] = (
+                respondent_features["slow_count"] / respondent_features["total_tasks"]
+            )
+        if "suspiciously_slow_count" in respondent_features.columns:
+            respondent_features["suspiciously_slow_rate"] = (
+                respondent_features["suspiciously_slow_count"] / respondent_features["total_tasks"]
+            )
+        if "normal_speed_count" in respondent_features.columns:
+            respondent_features["normal_speed_rate"] = (
+                respondent_features["normal_speed_count"] / respondent_features["total_tasks"]
             )
         if "night_task_count" in respondent_features.columns:
             respondent_features["night_task_rate"] = (

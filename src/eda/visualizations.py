@@ -493,6 +493,101 @@ def create_temporal_breakdown_summary(
     return "\n".join(summary_lines)
 
 
+def create_task_speed_breakdown_summary(
+    df: pd.DataFrame,
+    group_col: str = "wonky_study_count",
+    group_threshold: float = 0
+) -> str:
+    """
+    Create formatted text summary showing percentages for task speed features.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with speed features and group column
+    group_col : str
+        Column name for grouping (default: "wonky_study_count")
+    group_threshold : float
+        Threshold for determining wonky vs non-wonky groups
+        
+    Returns:
+    --------
+    str
+        Formatted summary string
+    """
+    summary_lines = ["Task speed features breakdown:"]
+    
+    # Check if group column exists
+    if group_col not in df.columns:
+        available_cols = [col for col in df.columns if 'wonky' in col.lower() or 'study' in col.lower()]
+        error_msg = (
+            f"Group column '{group_col}' not found in DataFrame.\n"
+            f"Available columns with 'wonky' or 'study': {available_cols[:10] if available_cols else 'None'}\n"
+            f"All columns: {list(df.columns)[:20]}"
+        )
+        return error_msg
+    
+    # Speed features to analyze (including normal speed)
+    speed_features = ['is_suspiciously_fast', 'is_fast', 'is_normal_speed', 'is_slow', 'is_suspiciously_slow']
+    
+    for feature in speed_features:
+        if feature not in df.columns:
+            continue
+        
+        # Calculate percentages
+        all_pct = df[feature].mean() * 100
+        
+        # Wonky group (group_col > threshold)
+        wonky_mask = df[group_col] > group_threshold
+        
+        # Non-wonky group: handle both NaN and == 0 cases
+        if df[group_col].isna().sum() > 0:
+            non_wonky_mask = df[group_col].isna()
+        else:
+            non_wonky_mask = df[group_col] == 0
+        
+        # Calculate percentages for each group
+        if wonky_mask.sum() > 0:
+            wonky_pct = df.loc[wonky_mask, feature].mean() * 100
+        else:
+            wonky_pct = 0.0
+        
+        if non_wonky_mask.sum() > 0:
+            non_wonky_pct = df.loc[non_wonky_mask, feature].mean() * 100
+        else:
+            non_wonky_pct = 0.0
+        
+        # Calculate delta (wonky - non-wonky)
+        delta_pct = wonky_pct - non_wonky_pct
+        
+        # Determine non-wonky condition text for display
+        if df[group_col].isna().sum() > 0:
+            non_wonky_condition = f"{group_col} is NaN"
+        else:
+            non_wonky_condition = f"{group_col} = 0"
+        
+        # Format feature name for display
+        feature_display = feature.replace('_', ' ').title()
+        if feature == 'is_fast':
+            feature_display = "Fast tasks (1 std dev below mean)"
+        elif feature == 'is_suspiciously_fast':
+            feature_display = "Suspiciously fast tasks (2 std dev below mean)"
+        elif feature == 'is_normal_speed':
+            feature_display = "Normal speed tasks (within 1 std dev of mean)"
+        elif feature == 'is_slow':
+            feature_display = "Slow tasks (1 std dev above mean)"
+        elif feature == 'is_suspiciously_slow':
+            feature_display = "Suspiciously slow tasks (2 std dev above mean)"
+        
+        summary_lines.append(f"  - {feature_display}: {all_pct:.1f}%")
+        summary_lines.append(f"    * All tasks: {all_pct:.1f}%")
+        summary_lines.append(f"    * Wonky study tasks ({group_col} > {group_threshold}): {wonky_pct:.1f}%")
+        summary_lines.append(f"    * Non-wonky study tasks ({non_wonky_condition}): {non_wonky_pct:.1f}%")
+        summary_lines.append(f"    * Delta (wonky - non-wonky): {delta_pct:+.1f}%")
+    
+    return "\n".join(summary_lines)
+
+
 def create_chi_squared_bar_chart(
     test_results_df: pd.DataFrame,
     chi2_col: str = "chi2",

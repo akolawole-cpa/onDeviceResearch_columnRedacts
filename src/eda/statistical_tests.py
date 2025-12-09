@@ -6,8 +6,15 @@ Functions for performing statistical hypothesis tests and analysis.
 
 import pandas as pd
 import numpy as np
-from scipy.stats import mannwhitneyu, ttest_ind, chi2_contingency
+from scipy.stats import mannwhitneyu, ttest_ind, chi2_contingency, norm
 from typing import List, Dict, Optional, Tuple
+
+# Try to import statsmodels for two-proportion z-test (more robust)
+try:
+    from statsmodels.stats.proportion import proportions_ztest
+    HAS_STATSMODELS = True
+except ImportError:
+    HAS_STATSMODELS = False
 
 
 def perform_mannwhitney_test(
@@ -600,4 +607,175 @@ def compare_demographic_groups(
         results_df = results_df.sort_values('mw_p_value')
     
     return results_df
+
+
+def compare_speed_categories_proportions(
+    df: pd.DataFrame,
+    speed_features: List[str],
+    group_col: str = "wonky_task_instances",
+    group_threshold: float = 0,
+    significance_level: float = 0.05
+) -> pd.DataFrame:
+    """
+    Compare proportions of speed categories between wonky and non-wonky groups using two-proportion z-test.
+    
+    For each speed category (fast, normal, slow, etc.), tests whether the proportion differs
+    significantly between wonky and non-wonky task instances.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with speed features and group column
+    speed_features : List[str]
+        List of speed feature column names (e.g., ['is_fast', 'is_normal_speed', 'is_slow'])
+    group_col : str
+        Column name for grouping variable (default: "wonky_task_instances")
+    group_threshold : float
+        Threshold for determining wonky vs non-wonky groups
+    significance_level : float
+        Significance level for determining significance
+        
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with comparison results for each speed category:
+        - feature: speed category name
+        - wonky_proportion: proportion in wonky group
+        - non_wonky_proportion: proportion in non-wonky group
+        - proportion_diff: difference (wonky - non_wonky)
+        - z_statistic: z-statistic from two-proportion z-test
+        - p_value: p-value from test
+        - significant: whether p-value < significance_level
+        - wonky_count: number of wonky tasks with this speed category
+        - wonky_total: total number of wonky tasks
+        - non_wonky_count: number of non-wonky tasks with this speed category
+        - non_wonky_total: total number of non-wonky tasks
+    """
+    if group_col not in df.columns:
+        return pd.DataFrame()
+    
+    # Prepare group variable
+    df_test = df.copy()
+    
+    # Create binary group variable
+    wonky_mask = df_test[group_col] > group_threshold
+    
+    # Handle non-wonky: check if column has NaN values
+    if df_test[group_col].isna().sum() > 0:
+        non_wonky_mask = df_test[group_col].isna()
+    else:
+        non_wonky_mask = df_test[group_col] == 0
+    
+    results = []
+    
+    for feature in speed_features:
+        if feature not in df_test.columns:
+            continue
+        
+        # Get counts for each group
+        wonky_total = wonky_mask.sum()
+        non_wonky_total = non_wonky_mask.sum()
+        
+        if wonky_total == 0 or non_wonky_total == 0:
+            continue
+        
+        # Count how many in each group have this speed category
+        wonky_with_feature = (wonky_mask & (df_test[feature] == 1)).sum()
+        non_wonky_with_feature = (non_wonky_mask & (df_test[feature] == 1)).sum()
+        
+        # Calculate proportions
+        wonky_prop = wonky_with_feature / wonky_total if wonky_total > 0 else 0.0
+        non_wonky_prop = non_wonky_with_feature / non_wonky_total if non_wonky_total > 0 else 0.0
+        prop_diff = wonky_prop - non_wonky_prop
+        
+        # Perform two-proportion z-test
+        # H0: p1 = p2 (proportions are equal)
+        # H1: p1 != p2 (proportions differ)
+        
+        if HAS_STATSMODELS:
+            # Use statsmodels (more robust, handles edge cases better)
+            try:
+                counts = np.array([wonky_with_feature, non_wonky_with_feature])
+                nobs = np.array([wonky_total, non_wonky_total])
+                z_stat, p_value = proportions_ztest(counts, nobs, alternative='two-sided')
+            except Exception as e:
+                # Fall back to manual calculation if statsmodels fails
+                z_stat, p_value = _manual_two_proportion_ztest(
+                    wonky_with_feature, wonky_total,
+                    non_wonky_with_feature, non_wonky_total
+                )
+        else:
+            # Manual calculation using normal approximation
+            z_stat, p_value = _manual_two_proportion_ztest(
+                wonky_with_feature, wonky_total,
+                non_wonky_with_feature, non_wonky_total
+            )
+        
+        results.append({
+            'feature': feature,
+            'wonky_proportion': wonky_prop,
+            'non_wonky_proportion': non_wonky_prop,
+            'proportion_diff': prop_diff,
+            'z_statistic': z_stat,
+            'p_value': p_value,
+            'significant': p_value < significance_level,
+            'wonky_count': wonky_with_feature,
+            'wonky_total': wonky_total,
+            'non_wonky_count': non_wonky_with_feature,
+            'non_wonky_total': non_wonky_total
+        })
+    
+    results_df = pd.DataFrame(results)
+    
+    if len(results_df) > 0:
+        # Sort by absolute z-statistic (most significant first)
+        results_df = results_df.sort_values('z_statistic', key=abs, ascending=False)
+    
+    return results_df
+
+
+def _manual_two_proportion_ztest(
+    count1: int, nobs1: int,
+    count2: int, nobs2: int
+) -> Tuple[float, float]:
+    """
+    Manual two-proportion z-test calculation.
+    
+    Parameters:
+    -----------
+    count1 : int
+        Number of successes in group 1
+    nobs1 : int
+        Total number of observations in group 1
+    count2 : int
+        Number of successes in group 2
+    nobs2 : int
+        Total number of observations in group 2
+        
+    Returns:
+    --------
+    Tuple[float, float]
+        (z-statistic, p-value)
+    """
+    # Calculate proportions
+    p1 = count1 / nobs1 if nobs1 > 0 else 0.0
+    p2 = count2 / nobs2 if nobs2 > 0 else 0.0
+    
+    # Pooled proportion (under null hypothesis that p1 = p2)
+    p_pooled = (count1 + count2) / (nobs1 + nobs2) if (nobs1 + nobs2) > 0 else 0.0
+    
+    # Standard error of the difference
+    se = np.sqrt(p_pooled * (1 - p_pooled) * (1/nobs1 + 1/nobs2))
+    
+    # Avoid division by zero
+    if se == 0:
+        return (0.0, 1.0)
+    
+    # Z-statistic
+    z_stat = (p1 - p2) / se
+    
+    # Two-sided p-value
+    p_value = 2 * (1 - norm.cdf(abs(z_stat)))
+    
+    return (z_stat, p_value)
 
