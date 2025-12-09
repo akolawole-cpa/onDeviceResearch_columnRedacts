@@ -415,7 +415,7 @@ def format_hypothesis_results(
 
 def perform_chi_square_tests(
     df: pd.DataFrame,
-    temporal_features: List[str],
+    feature_set: List[str],
     group_var: str = "wonky_study_count",
     significance_level: float = 0.01
 ) -> pd.DataFrame:
@@ -427,8 +427,8 @@ def perform_chi_square_tests(
     Parameters:
     -----------
     df : pd.DataFrame
-        DataFrame with temporal features and group variable
-    temporal_features : List[str]
+        DataFrame with features and group variable
+    feature_set : List[str]
         List of temporal feature column names to test
     group_var : str
         Column name for grouping variable
@@ -450,7 +450,7 @@ def perform_chi_square_tests(
     else:
         return pd.DataFrame()
     
-    for feature in temporal_features:
+    for feature in feature_set:
         if feature not in df_test.columns:
             continue
         
@@ -476,7 +476,6 @@ def perform_chi_square_tests(
                 'significant': p_value < significance_level
             })
         except Exception as e:
-            # Skip if test fails (e.g., insufficient data)
             continue
     
     results_df = pd.DataFrame(results)

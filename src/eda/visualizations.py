@@ -419,6 +419,16 @@ def create_temporal_breakdown_summary(
     """
     summary_lines = ["Temporal features created:"]
     
+    # Check if group column exists, provide helpful error if not
+    if group_col not in df.columns:
+        available_cols = [col for col in df.columns if 'wonky' in col.lower() or 'study' in col.lower()]
+        error_msg = (
+            f"Group column '{group_col}' not found in DataFrame.\n"
+            f"Available columns with 'wonky' or 'study': {available_cols[:10] if available_cols else 'None'}\n"
+            f"All columns: {list(df.columns)[:20]}"
+        )
+        return error_msg
+    
     for feature in temporal_features:
         if feature not in df.columns:
             continue
@@ -427,18 +437,39 @@ def create_temporal_breakdown_summary(
         all_pct = df[feature].mean() * 100
         
         # Wonky group (group_col > threshold)
-        wonky_mask = df[group_col] > group_threshold if group_col in df.columns else pd.Series([False] * len(df))
+        # Match original logic: wonky_study_count > 0
+        wonky_mask = df[group_col] > group_threshold
+        
+        # Non-wonky group: match original logic which uses .isna()
+        # Original code: user_info_df[user_info_df['wonky_study_count'].isna()]
+        # Handle both cases: if column has NaN values, use .isna(); otherwise use == 0
+        if df[group_col].isna().sum() > 0:
+            # Has NaN values - use original logic (NaN = non-wonky)
+            non_wonky_mask = df[group_col].isna()
+        else:
+            # No NaN values (e.g., after fillna(0)) - use == 0 for non-wonky
+            # This matches the case where NaN was filled with 0
+            non_wonky_mask = df[group_col] == 0
+        
+        # Calculate percentages for each group
         if wonky_mask.sum() > 0:
             wonky_pct = df.loc[wonky_mask, feature].mean() * 100
         else:
             wonky_pct = 0.0
         
-        # Non-wonky group (group_col <= threshold or NaN)
-        non_wonky_mask = ~wonky_mask if group_col in df.columns else pd.Series([True] * len(df))
         if non_wonky_mask.sum() > 0:
             non_wonky_pct = df.loc[non_wonky_mask, feature].mean() * 100
         else:
             non_wonky_pct = 0.0
+        
+        # Calculate delta (wonky - non-wonky)
+        delta_pct = wonky_pct - non_wonky_pct
+        
+        # Determine non-wonky condition text for display
+        if df[group_col].isna().sum() > 0:
+            non_wonky_condition = f"{group_col} is NaN"
+        else:
+            non_wonky_condition = f"{group_col} = 0"
         
         # Format feature name for display
         feature_display = feature.replace('_', ' ').title()
@@ -455,8 +486,9 @@ def create_temporal_breakdown_summary(
         
         summary_lines.append(f"  - {feature_display}: {all_pct:.1f}%")
         summary_lines.append(f"    * All tasks: {all_pct:.1f}%")
-        summary_lines.append(f"    * Wonky study tasks ({group_col} > 0): {wonky_pct:.1f}%")
-        summary_lines.append(f"    * Non-wonky study tasks ({group_col} = 0): {non_wonky_pct:.1f}%")
+        summary_lines.append(f"    * Wonky study tasks ({group_col} > {group_threshold}): {wonky_pct:.1f}%")
+        summary_lines.append(f"    * Non-wonky study tasks ({non_wonky_condition}): {non_wonky_pct:.1f}%")
+        summary_lines.append(f"    * Delta (wonky - non-wonky): {delta_pct:+.1f}%")
     
     return "\n".join(summary_lines)
 
@@ -522,6 +554,199 @@ def create_chi_squared_bar_chart(
         title=title,
         yaxis=dict(title=yaxis_title),
         xaxis=dict(title=xaxis_title)
+    )
+    
+    return fig
+
+
+def calculate_temporal_feature_deltas(
+    df: pd.DataFrame,
+    temporal_features: List[str],
+    group_col: str = "wonky_study_count",
+    group_threshold: float = 0
+) -> pd.DataFrame:
+    """
+    Calculate delta percentages (wonky - non-wonky) for temporal features.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with temporal features and group column
+    temporal_features : List[str]
+        List of temporal feature column names
+    group_col : str
+        Column name for grouping (default: "wonky_study_count")
+    group_threshold : float
+        Threshold for determining wonky vs non-wonky groups
+        
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with features as index and 'delta_pct' column
+    """
+    if group_col not in df.columns:
+        return pd.DataFrame()
+    
+    deltas = []
+    feature_names = []
+    
+    for feature in temporal_features:
+        if feature not in df.columns:
+            continue
+        
+        # Wonky group (group_col > threshold)
+        wonky_mask = df[group_col] > group_threshold
+        
+        # Non-wonky group: handle both NaN and == 0 cases
+        if df[group_col].isna().sum() > 0:
+            non_wonky_mask = df[group_col].isna()
+        else:
+            non_wonky_mask = df[group_col] == 0
+        
+        # Calculate percentages
+        if wonky_mask.sum() > 0:
+            wonky_pct = df.loc[wonky_mask, feature].mean() * 100
+        else:
+            wonky_pct = 0.0
+        
+        if non_wonky_mask.sum() > 0:
+            non_wonky_pct = df.loc[non_wonky_mask, feature].mean() * 100
+        else:
+            non_wonky_pct = 0.0
+        
+        # Calculate delta (wonky - non-wonky)
+        delta_pct = wonky_pct - non_wonky_pct
+        
+        deltas.append(delta_pct)
+        feature_names.append(feature)
+    
+    result_df = pd.DataFrame({
+        'delta_pct': deltas
+    }, index=feature_names)
+    
+    return result_df
+
+
+def create_chi_squared_delta_dual_axis_chart(
+    chi_square_results: pd.DataFrame,
+    delta_results: pd.DataFrame,
+    chi2_col: str = "chi2",
+    p_value_col: str = "chi_p_value",
+    delta_col: str = "delta_pct",
+    significance_level: float = 0.01,
+    title: str = "Chi-Squared Statistic and Delta by Temporal Feature",
+    xaxis_title: str = "Temporal Feature",
+    y1_title: str = "Chi-Squared Statistic",
+    y2_title: str = "Delta % (Wonky - Non-wonky)"
+) -> go.Figure:
+    """
+    Create dual-axis chart: bars for chi-squared statistics, line for deltas.
+    
+    Parameters:
+    -----------
+    chi_square_results : pd.DataFrame
+        DataFrame with temporal features as index and chi2/p_value columns
+    delta_results : pd.DataFrame
+        DataFrame with temporal features as index and delta_pct column
+    chi2_col : str
+        Column name for chi-squared statistic
+    p_value_col : str
+        Column name for p-value
+    delta_col : str
+        Column name for delta percentage
+    significance_level : float
+        Significance level for coloring bars
+    title : str
+        Chart title
+    xaxis_title : str
+        X-axis title
+    y1_title : str
+        Left Y-axis title (for chi-squared bars)
+    y2_title : str
+        Right Y-axis title (for delta line)
+        
+    Returns:
+    --------
+    go.Figure
+        Plotly figure with dual-axis chart
+    """
+    # Get common features (intersection of both DataFrames)
+    chi_features = set(chi_square_results.index.tolist())
+    delta_features = set(delta_results.index.tolist())
+    common_features = sorted(list(chi_features & delta_features))
+    
+    if len(common_features) == 0:
+        # Return empty figure if no common features
+        fig = go.Figure()
+        fig.add_annotation(
+            text="No common features between chi-squared results and delta results",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False
+        )
+        return fig
+    
+    # Prepare data
+    chi2_values = [chi_square_results.loc[f, chi2_col] for f in common_features]
+    p_values = chi_square_results.loc[common_features, p_value_col].values if p_value_col in chi_square_results.columns else None
+    delta_values = [delta_results.loc[f, delta_col] for f in common_features]
+    
+    # Color bars by significance if p-values available
+    if p_values is not None:
+        colors = ['indianred' if p < significance_level else 'lightcoral' for p in p_values]
+    else:
+        colors = 'indianred'
+    
+    fig = go.Figure()
+    
+    # Add bar chart for chi-squared statistics (left y-axis)
+    fig.add_trace(go.Bar(
+        x=common_features,
+        y=chi2_values,
+        name='Chi-Squared',
+        text=[f"{x:.2f}" for x in chi2_values],
+        textposition="inside",
+        marker_color=colors,
+        yaxis='y1'
+    ))
+    
+    # Add line chart for deltas (right y-axis)
+    fig.add_trace(go.Scatter(
+        x=common_features,
+        y=delta_values,
+        name='Delta %',
+        mode='lines+markers',
+        marker=dict(color="darkorange", size=10),
+        line=dict(color="darkorange", width=2),
+        yaxis='y2'
+    ))
+    
+    fig.update_layout(
+        title=title,
+        xaxis=dict(title=xaxis_title),
+        yaxis=dict(
+            title=y1_title,
+            titlefont=dict(color='indianred'),
+            tickfont=dict(color='indianred')
+        ),
+        yaxis2=dict(
+            title=y2_title,
+            titlefont=dict(color='darkorange'),
+            tickfont=dict(color='darkorange'),
+            overlaying='y',
+            side='right'
+        ),
+        legend=dict(
+            x=0.5,  # Center horizontally
+            y=-0.15,  # Below the plot
+            xanchor='center',  # Anchor point for x
+            yanchor='top',  # Anchor point for y
+            orientation='h',  # Horizontal layout
+            bgcolor='rgba(255,255,255,0.8)',  # Semi-transparent white background
+            bordercolor='gray',
+            borderwidth=1
+        ),
+        hovermode='x unified',
+        margin=dict(b=80)  # Add bottom margin to accommodate legend
     )
     
     return fig
