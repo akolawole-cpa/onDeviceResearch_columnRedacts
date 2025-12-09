@@ -216,7 +216,8 @@ def create_respondent_behavioral_features(
     # Aggregation dictionary for behavioral features
     agg_dict = {
         "taskPk": "count",
-        "task_time_taken": ["mean", "std", "min", "max", "median"],
+        "task_time_taken_s": ["mean", "std", "min", "max", "median"],
+        "task_time_taken_s_adj": ["mean", "std", "min", "max", "median"],
         "task_points_perMinute": ["mean", "std", "min", "max", "median"],
         "is_suspiciously_fast": "sum",
         "is_very_fast": "sum",
@@ -229,6 +230,7 @@ def create_respondent_behavioral_features(
         "risk": ["mean", "max"],
         "quality": ["mean", "max"],
         "wonky_study_flag": "max",
+        "wonky_study_count": "sum",
         date_col: ["min", "max"],
     }
     
@@ -238,11 +240,10 @@ def create_respondent_behavioral_features(
         if k in df.columns
     }
     
-    # Group by respondent ID and demographic columns
-    # Demographic columns will be preserved automatically as grouping columns
-    groupby_cols = [respondent_id_col] + available_demographic_cols
+    # Group by ONLY respondent ID (matching original behavior)
+    # This ensures one row per respondent regardless of demographic variations
     respondent_features = (
-        df.groupby(groupby_cols)
+        df.groupby(respondent_id_col)
         .agg(filtered_agg_dict)
         .reset_index()
     )
@@ -257,22 +258,63 @@ def create_respondent_behavioral_features(
             # Aggregated column: join tuple elements
             flattened_cols.append("_".join(str(c) for c in col).strip("_"))
         else:
-            # Grouping column (respondent_id_col or demographic): keep as string
+            # Grouping column (respondent_id_col): keep as string
             flattened_cols.append(str(col))
     respondent_features.columns = flattened_cols
+    
+    # Add demographic columns by taking the mode (most common value) per respondent
+    # If mode is not available (all NaN), use first value
+    if available_demographic_cols:
+        def get_mode_or_first(series):
+            """Get mode if available, otherwise first non-null value, otherwise first value."""
+            # Remove NaN values for mode calculation
+            non_null = series.dropna()
+            if len(non_null) > 0:
+                mode_values = non_null.mode()
+                if len(mode_values) > 0:
+                    return mode_values.iloc[0]
+                else:
+                    return non_null.iloc[0]
+            else:
+                # All NaN, return first value (which is NaN)
+                return series.iloc[0] if len(series) > 0 else None
+        
+        demographic_agg = {}
+        for col in available_demographic_cols:
+            if col in df.columns:
+                demographic_agg[col] = get_mode_or_first
+        
+        if demographic_agg:
+            demographic_features = (
+                df.groupby(respondent_id_col)
+                .agg(demographic_agg)
+                .reset_index()
+            )
+            # Merge demographic columns into respondent_features
+            respondent_features = respondent_features.merge(
+                demographic_features,
+                on=respondent_id_col,
+                how='left'
+            )
     
     # Rename columns
     rename_dict = {
         "taskPk_count": "total_tasks",
-        "task_time_taken_mean": "avg_task_time",
-        "task_time_taken_std": "std_task_time",
-        "task_time_taken_min": "min_task_time",
-        "task_time_taken_max": "max_task_time",
+        "task_time_taken_s_mean": "avg_task_time",
+        "task_time_taken_s_std": "std_task_time",
+        "task_time_taken_s_min": "min_task_time",
+        "task_time_taken_s_max": "max_task_time",
+        "task_time_taken_s_median": "median_task_time",
+        "task_time_taken_s_adj_mean": "avg_task_time_adj",
+        "task_time_taken_s_adj_std": "std_task_time_adj",
+        "task_time_taken_s_adj_min": "min_task_time_adj",
+        "task_time_taken_s_adj_max": "max_task_time_adj",
+        "task_time_taken_s_adj_median": "median_task_time_adj",
         "task_points_perMinute_mean": "avg_task_pointsPerMin",
         "task_points_perMinute_std": "std_task_pointsPerMin",
         "task_points_perMinute_min": "min_task_pointsPerMin",
         "task_points_perMinute_max": "max_task_pointsPerMin",
-        "task_time_taken_median": "median_task_time",
+        "task_points_perMinute_median": "median_task_pointsPerMin",
         "is_suspiciously_fast_sum": "suspicious_fast_count",
         "is_very_fast_sum": "very_fast_count",
         "is_fast_sum": "fast_count",
@@ -286,6 +328,7 @@ def create_respondent_behavioral_features(
         "quality_mean": "avg_quality",
         "quality_max": "max_quality",
         "wonky_study_flag_max": "wonky_study_flag",
+        "wonky_study_count_sum": "wonky_study_count",
         f"{date_col}_min": "first_task_date",
         f"{date_col}_max": "last_task_date",
     }
