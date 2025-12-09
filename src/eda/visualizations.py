@@ -455,8 +455,8 @@ def create_temporal_breakdown_summary(
         
         summary_lines.append(f"  - {feature_display}: {all_pct:.1f}%")
         summary_lines.append(f"    * All tasks: {all_pct:.1f}%")
-        summary_lines.append(f"    * Wonky study tasks (wonky_study_count > 0): {wonky_pct:.1f}%")
-        summary_lines.append(f"    * Non-wonky study tasks (wonky_study_count = 0): {non_wonky_pct:.1f}%")
+        summary_lines.append(f"    * Wonky study tasks ({group_col} > 0): {wonky_pct:.1f}%")
+        summary_lines.append(f"    * Non-wonky study tasks ({group_col} = 0): {non_wonky_pct:.1f}%")
     
     return "\n".join(summary_lines)
 

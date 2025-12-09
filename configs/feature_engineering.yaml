@@ -59,7 +59,7 @@ wonky_score_thresholds:
   low_quality: 0.5
   low_cv: 0.2
   night_rate: 0.5
-  tasks_per_day: 10
+  tasks_per_day: 10 
 
 # Wonky score bins
 wonky_score_bins: [0, 2, 4, 6, 10]

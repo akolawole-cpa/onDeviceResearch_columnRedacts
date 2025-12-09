@@ -25,15 +25,31 @@ def create_time_features(df: pd.DataFrame, date_col: str = "date_completed") -> 
     pd.DataFrame
         DataFrame with added time features
     """
+    
     df = df.copy()
     df["hour_of_day"] = df[date_col].dt.hour
     df["day_of_week"] = df[date_col].dt.dayofweek
     df["is_weekend"] = (df["day_of_week"] > 5).astype(int)
+
+    df["is_monday"]    = df[date_col].dt.day_name().eq("Monday")
+    df["is_tuesday"]   = df[date_col].dt.day_name().eq("Tuesday")
+    df["is_wednesday"] = df[date_col].dt.day_name().eq("Wednesday")
+    df["is_thursday"]  = df[date_col].dt.day_name().eq("Thursday")
+    df["is_friday"]    = df[date_col].dt.day_name().eq("Friday")
+    df["is_saturday"]  = df[date_col].dt.day_name().eq("Saturday")
+    df["is_sunday"]    = df[date_col].dt.day_name().eq("Sunday")
+
     df["is_night"] = (
         (df["hour_of_day"] >= 22) | (df["hour_of_day"] <= 6)
     ).astype(int)
     df["is_business_hour"] = (
         (df["hour_of_day"] >= 9) & (df["hour_of_day"] <= 17)
+    ).astype(int)
+    df["is_business_hour_weekday"] = (
+        (df["is_business_hour"] == 1) & (df["is_weekend"] == 0)
+    ).astype(int)
+    df["is_business_hour_weekend"] = (
+        (df["is_business_hour"] == 1) & (df["is_weekend"] == 1)
     ).astype(int)
     
     return df
@@ -87,6 +103,7 @@ def create_respondent_behavioral_features(
     df: pd.DataFrame,
     respondent_id_col: str = "respondentPk",
     date_col: str = "date_completed",
+    demographic_cols: list = None,
     config: Optional[Dict] = None
 ) -> pd.DataFrame:
     """
@@ -100,20 +117,31 @@ def create_respondent_behavioral_features(
         Name of the respondent ID column
     date_col : str
         Name of the date column
+    demographic_cols : list
+        List of demographic column names to include in grouping and preserve in output.
+        Examples: ['platform_name', 'hardware_version', 'survey_locale']
     config : dict, optional
         Configuration dictionary with thresholds and parameters
         
     Returns:
     --------
     pd.DataFrame
-        Respondent-level DataFrame with behavioral features
+        Respondent-level DataFrame with behavioral features and demographic columns
     """
     if config is None:
         config = {}
     
-    df = df.sort_values(by=[respondent_id_col, date_col])
+    # Filter demographic columns to only those that exist in the dataframe
+    available_demographic_cols = [
+        col for col in demographic_cols 
+        if col in df.columns and col != respondent_id_col
+    ]
     
-    # Aggregation dictionary
+    # Sort by respondent ID, demographics (if any), and date
+    sort_cols = [respondent_id_col] + available_demographic_cols + [date_col]
+    df = df.sort_values(by=sort_cols)
+    
+    # Aggregation dictionary for behavioral features
     agg_dict = {
         "taskPk": "count",
         "task_time_taken": ["mean", "std", "min", "max", "median"],
@@ -134,17 +162,28 @@ def create_respondent_behavioral_features(
         if k in df.columns
     }
     
+    # Group by respondent ID and demographic columns
+    # Demographic columns will be preserved automatically as grouping columns
+    groupby_cols = [respondent_id_col] + available_demographic_cols
+    print(groupby_cols)
     respondent_features = (
-        df.groupby(respondent_id_col)
+        df.groupby(groupby_cols)
         .agg(filtered_agg_dict)
         .reset_index()
     )
     
     # Flatten column names
-    respondent_features.columns = [
-        "_".join(col).strip("_") if isinstance(col, tuple) and col[1] else col[0]
-        for col in respondent_features.columns.values
-    ]
+    # Aggregated columns are tuples like ('taskPk', 'count')
+    flattened_cols = []
+    for col in respondent_features.columns.values:
+        if isinstance(col, tuple):
+            # Aggregated column: join tuple elements
+            flattened_cols.append("_".join(str(c) for c in col).strip("_"))
+        else:
+            # Grouping column (respondent_id_col or demographic): keep as string
+            flattened_cols.append(str(col))
+    respondent_features.columns = flattened_cols
+    print(respondent_features.columns)
     
     # Rename columns
     rename_dict = {
@@ -596,4 +635,3 @@ def create_wonky_risk_score(
     )
     
     return df
-

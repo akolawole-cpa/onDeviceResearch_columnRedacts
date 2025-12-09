@@ -17,10 +17,12 @@ tables:
   respondent_info: "respondent_info"
   task: "task"
 
-# # Output file paths (saved in misc folder)
-# output_files:
-#   user_info_df: "dbfs:/FileStore/misc/user_info_df_pullcomplete.parquet"
-#   wonky_user_counts: "dbfs:/FileStore/misc/wonky_user_counts_pullcomplete.parquet"
+# Output file paths (saved in misc folder)
+output_files:
+  user_info_df: "dbfs:/FileStore/misc/user_info_df_pullcomplete.parquet"
+  wonky_user_counts: "dbfs:/FileStore/misc/wonky_user_counts_pullcomplete.parquet"
+  wonky_respondent_df: "dbfs:/FileStore/misc/wonky_respondent_df_pullcomplete.parquet"
+  wonky_respondent_summary: "dbfs:/FileStore/misc/wonky_summary_pullcomplete.parquet"
 
 # Data filters
 filters:
