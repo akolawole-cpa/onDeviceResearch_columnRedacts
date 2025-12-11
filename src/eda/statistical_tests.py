@@ -17,6 +17,10 @@ except ImportError:
     HAS_STATSMODELS = False
 
 
+# ============================================================================
+# SIMPLE TEST FUNCTIONS: Basic test execution on two groups
+# ============================================================================
+
 def perform_mannwhitney_test(
     group1: pd.Series,
     group2: pd.Series,
@@ -706,15 +710,17 @@ def compare_speed_categories_proportions(
                 z_stat, p_value = proportions_ztest(counts, nobs, alternative='two-sided')
             except Exception as e:
                 # Fall back to manual calculation if statsmodels fails
-                z_stat, p_value = _manual_two_proportion_ztest(
+                z_stat, p_value = perform_two_proportion_ztest(
                     wonky_with_feature, wonky_total,
-                    non_wonky_with_feature, non_wonky_total
+                    non_wonky_with_feature, non_wonky_total,
+                    alternative='two-sided'
                 )
         else:
             # Manual calculation using normal approximation
-            z_stat, p_value = _manual_two_proportion_ztest(
+            z_stat, p_value = perform_two_proportion_ztest(
                 wonky_with_feature, wonky_total,
-                non_wonky_with_feature, non_wonky_total
+                non_wonky_with_feature, non_wonky_total,
+                alternative='two-sided'
             )
         
         results.append({
@@ -740,12 +746,13 @@ def compare_speed_categories_proportions(
     return results_df
 
 
-def _manual_two_proportion_ztest(
+def perform_two_proportion_ztest(
     count1: int, nobs1: int,
-    count2: int, nobs2: int
+    count2: int, nobs2: int,
+    alternative: str = "two-sided"
 ) -> Tuple[float, float]:
     """
-    Manual two-proportion z-test calculation.
+    Perform two-proportion z-test to compare proportions between two groups.
     
     Parameters:
     -----------
@@ -757,6 +764,8 @@ def _manual_two_proportion_ztest(
         Number of successes in group 2
     nobs2 : int
         Total number of observations in group 2
+    alternative : str
+        Alternative hypothesis: 'two-sided', 'less', or 'greater'
         
     Returns:
     --------
@@ -780,7 +789,324 @@ def _manual_two_proportion_ztest(
     # Z-statistic
     z_stat = (p1 - p2) / se
     
-    # Two-sided p-value
-    p_value = 2 * (1 - norm.cdf(abs(z_stat)))
+    # Calculate p-value based on alternative
+    if alternative == 'two-sided':
+        p_value = 2 * (1 - norm.cdf(abs(z_stat)))
+    elif alternative == 'less':
+        p_value = norm.cdf(z_stat)
+    elif alternative == 'greater':
+        p_value = 1 - norm.cdf(z_stat)
+    else:
+        p_value = 2 * (1 - norm.cdf(abs(z_stat)))
     
     return (z_stat, p_value)
+
+
+# ============================================================================
+# WRAPPER FUNCTIONS: Run tests on feature sets
+# ============================================================================
+
+def perform_mannwhitney_tests(
+    df: pd.DataFrame,
+    feature_set: List[str],
+    group_var: str = "wonky_study_count",
+    significance_level: float = 0.01,
+    alternative: str = "two-sided"
+) -> pd.DataFrame:
+    """
+    Perform Mann-Whitney U tests on a set of features comparing two groups.
+    
+    Tests whether continuous features differ significantly between groups (wonky vs non-wonky).
+    Also calculates CLES (Common Language Effect Size) = statistic / (n1 * n2).
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with features and group variable
+    feature_set : List[str]
+        List of feature column names to test
+    group_var : str
+        Column name for grouping variable
+    significance_level : float
+        Significance level for determining significance
+    alternative : str
+        Alternative hypothesis: 'two-sided', 'less', or 'greater'
+        
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with statistic, p_value, CLES, and significance for each feature.
+        Indexed by feature name, sorted by statistic (descending).
+    """
+    results = []
+    
+    # Prepare group variable (binary: >0 vs =0 or NaN)
+    if group_var not in df.columns:
+        return pd.DataFrame()
+    
+    df_test = df.copy()
+    df_test[group_var] = df_test[group_var].fillna(0)
+    df_test['group_binary'] = (df_test[group_var] > 0).astype(int)
+    
+    group1_mask = df_test['group_binary'] == 1
+    group2_mask = df_test['group_binary'] == 0
+    
+    for feature in feature_set:
+        if feature not in df_test.columns:
+            continue
+        
+        group1_data = df_test.loc[group1_mask, feature]
+        group2_data = df_test.loc[group2_mask, feature]
+        
+        # Get cleaned data for length calculation
+        group1_clean = group1_data.dropna()
+        group2_clean = group2_data.dropna()
+        
+        # Check if we have enough data
+        if len(group1_clean) == 0 or len(group2_clean) == 0:
+            continue
+        
+        # Perform Mann-Whitney U test
+        try:
+            statistic, p_value = perform_mannwhitney_test(
+                group1_data,
+                group2_data,
+                alternative=alternative
+            )
+            
+            # Calculate CLES (Common Language Effect Size)
+            cles = statistic / (len(group1_clean) * len(group2_clean))
+            
+            results.append({
+                'feature': feature,
+                'statistic': statistic,
+                'p_value': p_value,
+                'cles': cles,
+                'significant': p_value < significance_level
+            })
+        except Exception as e:
+            continue
+    
+    results_df = pd.DataFrame(results)
+    
+    if len(results_df) > 0:
+        results_df = results_df.set_index('feature')
+        results_df = results_df.sort_values('statistic', ascending=False)
+    
+    return results_df
+
+
+def perform_welch_ttests(
+    df: pd.DataFrame,
+    feature_set: List[str],
+    group_var: str = "wonky_study_count",
+    significance_level: float = 0.01,
+    alternative: str = "two-sided"
+) -> pd.DataFrame:
+    """
+    Perform Welch's t-tests on a set of features comparing two groups.
+    
+    Tests whether continuous features differ significantly between groups (wonky vs non-wonky).
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with features and group variable
+    feature_set : List[str]
+        List of feature column names to test
+    group_var : str
+        Column name for grouping variable
+    significance_level : float
+        Significance level for determining significance
+    alternative : str
+        Alternative hypothesis: 'two-sided', 'less', or 'greater'
+        
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with statistic, p_value, and significance for each feature.
+        Indexed by feature name, sorted by absolute statistic (descending).
+    """
+    results = []
+    
+    # Prepare group variable (binary: >0 vs =0 or NaN)
+    if group_var not in df.columns:
+        return pd.DataFrame()
+    
+    df_test = df.copy()
+    df_test[group_var] = df_test[group_var].fillna(0)
+    df_test['group_binary'] = (df_test[group_var] > 0).astype(int)
+    
+    group1_mask = df_test['group_binary'] == 1
+    group2_mask = df_test['group_binary'] == 0
+    
+    for feature in feature_set:
+        if feature not in df_test.columns:
+            continue
+        
+        group1_data = df_test.loc[group1_mask, feature]
+        group2_data = df_test.loc[group2_mask, feature]
+        
+        # Check if we have enough data
+        if len(group1_data.dropna()) == 0 or len(group2_data.dropna()) == 0:
+            continue
+        
+        # Perform Welch's t-test
+        try:
+            statistic, p_value = perform_welch_ttest(
+                group1_data,
+                group2_data,
+                alternative=alternative
+            )
+            
+            if np.isnan(statistic) or np.isnan(p_value):
+                continue
+            
+            results.append({
+                'feature': feature,
+                'statistic': statistic,
+                'p_value': p_value,
+                'significant': p_value < significance_level
+            })
+        except Exception as e:
+            continue
+    
+    results_df = pd.DataFrame(results)
+    
+    if len(results_df) > 0:
+        results_df = results_df.set_index('feature')
+        results_df = results_df.sort_values('statistic', key=abs, ascending=False)
+    
+    return results_df
+
+
+def perform_two_proportion_z_tests(
+    df: pd.DataFrame,
+    feature_set: List[str],
+    group_var: str = "wonky_study_count",
+    significance_level: float = 0.01,
+    alternative: str = "two-sided"
+) -> pd.DataFrame:
+    """
+    Perform two-proportion z-tests on a set of binary features comparing two groups.
+    
+    Tests whether binary features (proportions) differ significantly between groups (wonky vs non-wonky).
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with features and group variable
+    feature_set : List[str]
+        List of binary feature column names to test (should be 0/1 or boolean)
+    group_var : str
+        Column name for grouping variable
+    significance_level : float
+        Significance level for determining significance
+    alternative : str
+        Alternative hypothesis: 'two-sided', 'less', or 'greater'
+        
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with z_statistic, p_value, and significance for each feature.
+        Indexed by feature name, sorted by absolute z_statistic (descending).
+    """
+    results = []
+    
+    # Prepare group variable (binary: >0 vs =0 or NaN)
+    if group_var not in df.columns:
+        return pd.DataFrame()
+    
+    df_test = df.copy()
+    df_test[group_var] = df_test[group_var].fillna(0)
+    df_test['group_binary'] = (df_test[group_var] > 0).astype(int)
+    
+    group1_mask = df_test['group_binary'] == 1
+    group2_mask = df_test['group_binary'] == 0
+    
+    group1_total = group1_mask.sum()
+    group2_total = group2_mask.sum()
+    
+    if group1_total == 0 or group2_total == 0:
+        return pd.DataFrame()
+    
+    for feature in feature_set:
+        if feature not in df_test.columns:
+            continue
+        
+        # Get counts for each group
+        group1_with_feature = (group1_mask & (df_test[feature] == 1)).sum()
+        group2_with_feature = (group2_mask & (df_test[feature] == 1)).sum()
+        
+        # Calculate proportions
+        group1_prop = group1_with_feature / group1_total if group1_total > 0 else 0.0
+        group2_prop = group2_with_feature / group2_total if group2_total > 0 else 0.0
+        
+        # Perform two-proportion z-test
+        try:
+            if HAS_STATSMODELS:
+                # Use statsmodels (more robust, handles edge cases better)
+                try:
+                    counts = np.array([group1_with_feature, group2_with_feature])
+                    nobs = np.array([group1_total, group2_total])
+                    z_stat, p_value = proportions_ztest(counts, nobs, alternative=alternative)
+                except Exception as e:
+                    # Fall back to manual calculation if statsmodels fails
+                    z_stat, p_value = perform_two_proportion_ztest(
+                        group1_with_feature, group1_total,
+                        group2_with_feature, group2_total,
+                        alternative=alternative
+                    )
+            else:
+                # Manual calculation using normal approximation
+                z_stat, p_value = perform_two_proportion_ztest(
+                    group1_with_feature, group1_total,
+                    group2_with_feature, group2_total,
+                    alternative=alternative
+                )
+            
+            results.append({
+                'feature': feature,
+                'z_statistic': z_stat,
+                'p_value': p_value,
+                'significant': p_value < significance_level,
+                'group1_proportion': group1_prop,
+                'group2_proportion': group2_prop,
+                'proportion_diff': group1_prop - group2_prop
+            })
+        except Exception as e:
+            continue
+    
+    results_df = pd.DataFrame(results)
+    
+    if len(results_df) > 0:
+        results_df = results_df.set_index('feature')
+        results_df = results_df.sort_values('z_statistic', key=abs, ascending=False)
+    
+    return results_df
+
+
+def _manual_two_proportion_ztest(
+    count1: int, nobs1: int,
+    count2: int, nobs2: int
+) -> Tuple[float, float]:
+    """
+    Manual two-proportion z-test calculation (legacy function, use perform_two_proportion_ztest instead).
+    
+    Parameters:
+    -----------
+    count1 : int
+        Number of successes in group 1
+    nobs1 : int
+        Total number of observations in group 1
+    count2 : int
+        Number of successes in group 2
+    nobs2 : int
+        Total number of observations in group 2
+        
+    Returns:
+    --------
+    Tuple[float, float]
+        (z-statistic, p-value)
+    """
+    return perform_two_proportion_ztest(count1, nobs1, count2, nobs2, alternative='two-sided')

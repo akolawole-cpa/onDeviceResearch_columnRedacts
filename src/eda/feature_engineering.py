@@ -31,13 +31,13 @@ def create_time_features(df: pd.DataFrame, date_col: str = "date_completed") -> 
     df["day_of_week"] = df[date_col].dt.dayofweek
     df["is_weekend"] = (df["day_of_week"] > 5).astype(int)
 
-    df["is_monday"]    = df[date_col].dt.day_name().eq("Monday")
-    df["is_tuesday"]   = df[date_col].dt.day_name().eq("Tuesday")
-    df["is_wednesday"] = df[date_col].dt.day_name().eq("Wednesday")
-    df["is_thursday"]  = df[date_col].dt.day_name().eq("Thursday")
-    df["is_friday"]    = df[date_col].dt.day_name().eq("Friday")
-    df["is_saturday"]  = df[date_col].dt.day_name().eq("Saturday")
-    df["is_sunday"]    = df[date_col].dt.day_name().eq("Sunday")
+    df["is_monday"]    = df[date_col].dt.day_name().eq("Monday").astype(int)
+    df["is_tuesday"]   = df[date_col].dt.day_name().eq("Tuesday").astype(int)
+    df["is_wednesday"] = df[date_col].dt.day_name().eq("Wednesday").astype(int)
+    df["is_thursday"]  = df[date_col].dt.day_name().eq("Thursday").astype(int)
+    df["is_friday"]    = df[date_col].dt.day_name().eq("Friday").astype(int)
+    df["is_saturday"]  = df[date_col].dt.day_name().eq("Saturday").astype(int)
+    df["is_sunday"]    = df[date_col].dt.day_name().eq("Sunday").astype(int)
 
     df["is_night"] = (
         (df["hour_of_day"] >= 22) | (df["hour_of_day"] <= 6)
@@ -169,7 +169,7 @@ def create_respondent_behavioral_features(
     df: pd.DataFrame,
     respondent_id_col: str = "respondentPk",
     date_col: str = "date_completed",
-    demographic_cols: list = None,
+    categorical_cols: list = None,
     config: Optional[Dict] = None
 ) -> pd.DataFrame:
     """
@@ -183,8 +183,8 @@ def create_respondent_behavioral_features(
         Name of the respondent ID column
     date_col : str
         Name of the date column
-    demographic_cols : list
-        List of demographic column names to include in grouping and preserve in output.
+    categorical_cols : list
+        List of categorical column names to include in grouping and preserve in output.
         Examples: ['platform_name', 'hardware_version', 'survey_locale']
     config : dict, optional
         Configuration dictionary with thresholds and parameters
@@ -198,17 +198,17 @@ def create_respondent_behavioral_features(
         config = {}
     
     # Handle None demographic_cols
-    if demographic_cols is None:
-        demographic_cols = []
+    if categorical_cols is None:
+        categorical_cols = []
     
     # Filter demographic columns to only those that exist in the dataframe
-    available_demographic_cols = [
-        col for col in demographic_cols 
+    available_categorical_cols = [
+        col for col in categorical_cols 
         if col in df.columns and col != respondent_id_col
     ]
     
     # Sort by respondent ID, demographics (if any), and date
-    sort_cols = [respondent_id_col] + available_demographic_cols + [date_col]
+    sort_cols = [respondent_id_col] + available_categorical_cols + [date_col]
     df = df.sort_values(by=sort_cols)
 
     print(df.shape)
@@ -231,6 +231,7 @@ def create_respondent_behavioral_features(
         "quality": ["mean", "max"],
         "wonky_study_flag": "max",
         "wonky_study_count": "sum",
+        "days_active_before_task": "mean",
         date_col: ["min", "max"],
     }
     
@@ -264,7 +265,7 @@ def create_respondent_behavioral_features(
     
     # Add demographic columns by taking the mode (most common value) per respondent
     # If mode is not available (all NaN), use first value
-    if available_demographic_cols:
+    if available_categorical_cols:
         def get_mode_or_first(series):
             """Get mode if available, otherwise first non-null value, otherwise first value."""
             # Remove NaN values for mode calculation
@@ -279,20 +280,20 @@ def create_respondent_behavioral_features(
                 # All NaN, return first value (which is NaN)
                 return series.iloc[0] if len(series) > 0 else None
         
-        demographic_agg = {}
-        for col in available_demographic_cols:
+        categorical_agg = {}
+        for col in available_categorical_cols:
             if col in df.columns:
-                demographic_agg[col] = get_mode_or_first
+                categorical_agg[col] = get_mode_or_first
         
-        if demographic_agg:
-            demographic_features = (
+        if categorical_agg:
+            categorical_features = (
                 df.groupby(respondent_id_col)
-                .agg(demographic_agg)
+                .agg(categorical_agg)
                 .reset_index()
             )
             # Merge demographic columns into respondent_features
             respondent_features = respondent_features.merge(
-                demographic_features,
+                categorical_features,
                 on=respondent_id_col,
                 how='left'
             )
@@ -390,7 +391,7 @@ def create_respondent_behavioral_features(
         respondent_features["days_active"] = (
             respondent_features["last_task_date"] - respondent_features["first_task_date"]
         ).dt.days + 1
-        respondent_features["tasks_per_day"] = (
+        respondent_features["tasks_per_days_active_all"] = (
             respondent_features["total_tasks"] / respondent_features["days_active"]
         )
     
@@ -446,39 +447,15 @@ def create_respondent_behavioral_features(
             unique_bins.append(x)
     velocity_bins = sorted(unique_bins)  # Sort to ensure monotonic increase
     
-    if "tasks_per_day" in respondent_features.columns:
+    if "tasks_per_days_active_all" in respondent_features.columns:
         try:
             respondent_features["velocity_tier"] = pd.cut(
-                respondent_features["tasks_per_day"],
+                respondent_features["tasks_per_days_active_all"],
                 bins=velocity_bins,
                 labels=velocity_labels,
             )
-        except ValueError as e:
-            # If bins still fail, use default bins
-            print(f"Warning: velocity_bins conversion failed, using default bins. Error: {e}")
-            velocity_bins = [0, 1, 3, 5, 10, np.inf]
-            respondent_features["velocity_tier"] = pd.cut(
-                respondent_features["tasks_per_day"],
-                bins=velocity_bins,
-                labels=velocity_labels,
-            )
-    
-    if "avg_task_pointsPerMin" in respondent_features.columns:
-        try:
-            respondent_features["velocity_tier(pointsPerMinute)"] = pd.cut(
-                respondent_features["avg_task_pointsPerMin"],
-                bins=velocity_bins,
-                labels=velocity_labels,
-            )
-        except ValueError as e:
-            # If bins still fail, use default bins
-            print(f"Warning: velocity_bins conversion failed for pointsPerMinute, using default bins. Error: {e}")
-            velocity_bins = [0, 1, 3, 5, 10, np.inf]
-            respondent_features["velocity_tier(pointsPerMinute)"] = pd.cut(
-                respondent_features["avg_task_pointsPerMin"],
-                bins=velocity_bins,
-                labels=velocity_labels,
-            )
+        except:
+            pass
     
     return respondent_features
 
@@ -524,20 +501,10 @@ def add_wonky_features(
     
     # Wonky concentration
     if "wonky_task_ratio" in df.columns:
-        df['wonky_concentration'] = pd.cut(
-            df['wonky_task_ratio'],
-            bins=[0, 0.2, 0.4, 0.6, 0.8, 1.0],
-            labels=['Very_Low', 'Low', 'Medium', 'High', 'Very_High'],
-            include_lowest=True
-        )
+        print("is_high_wonky means > 50% wonky task ratio")
         df['is_high_wonky'] = (df['wonky_task_ratio'] > 0.5).astype(int)
+        print("is_quite_wonky means > 30% wonky task ratio")
         df['is_quite_wonky'] = (df['wonky_task_ratio'] > 0.3).astype(int)
-        
-        if "wonky_unique_tasks" in df.columns and "wonky_task_instances" in df.columns:
-            df['wonky_diversity'] = (
-                df['wonky_unique_tasks'] / 
-                df['wonky_task_instances'].replace(0, np.nan)
-            )
     
     return df
 
