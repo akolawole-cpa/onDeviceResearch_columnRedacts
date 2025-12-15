@@ -58,7 +58,9 @@ def create_time_features(df: pd.DataFrame, date_col: str = "date_completed") -> 
 def create_task_speed_features(
     df: pd.DataFrame,
     task_time_col: str = "task_time_taken_s",
-    use_std_dev: bool = True
+    use_std_dev: bool = True,
+    group_by_col: Optional[str] = None,
+    min_group_size: int = 10
 ) -> pd.DataFrame:
     """
     Create task speed-related features using standard deviations.
@@ -71,6 +73,13 @@ def create_task_speed_features(
         Name of the task time column (in seconds)
     use_std_dev : bool
         If True, use standard deviations to define thresholds. If False, use legacy hardcoded thresholds.
+    group_by_col : str, optional
+        Column name to group by when calculating thresholds (e.g., 'task_length_of_task').
+        If None, will auto-detect 'task_length_of_task' if it exists.
+        If grouping column doesn't exist, uses global thresholds (backward compatible).
+    min_group_size : int, default=10
+        Minimum number of tasks required in a group to calculate group-specific thresholds.
+        Groups with fewer tasks will use global thresholds as fallback.
         
     Returns:
     --------
@@ -112,34 +121,133 @@ def create_task_speed_features(
             df["is_normal_speed"] = 1  # All tasks are "normal" if they're all the same
             df["is_very_fast"] = 0
         else:
-            # Calculate percentiles for the entire sample
-            fast_threshold = valid_times.quantile(0.16)  # ~1 std dev below mean
-            suspiciously_fast_threshold = valid_times.quantile(0.025)  # ~2 std dev below mean
-            slow_threshold = valid_times.quantile(0.84)  # ~1 std dev above mean
-            suspiciously_slow_threshold = valid_times.quantile(0.975)  # ~2 std dev above mean
+            # Detect grouping column
+            grouping_col = None
+            if group_by_col is not None:
+                if group_by_col in df.columns:
+                    grouping_col = group_by_col
+            elif "task_length_of_task" in df.columns:
+                grouping_col = "task_length_of_task"
             
-            # Also calculate mean and std for display (using trimmed data to avoid extreme outliers)
-            # Trim extreme outliers (top/bottom 1%) before calculating stats for display
-            trimmed_data = valid_times.clip(
-                lower=valid_times.quantile(0.01),
-                upper=valid_times.quantile(0.99)
-            )
-            mean_time = trimmed_data.mean()
-            std_time = trimmed_data.std()
+            # Calculate global thresholds as fallback
+            fast_threshold_global = valid_times.quantile(0.16)
+            suspiciously_fast_threshold_global = valid_times.quantile(0.025)
+            slow_threshold_global = valid_times.quantile(0.84)
+            suspiciously_slow_threshold_global = valid_times.quantile(0.975)
             
-            # Create speed flags (handle NaN values by setting to 0)
-            df["is_fast"] = (df[task_time_col] < fast_threshold).fillna(0).astype(int)
-            df["is_suspiciously_fast"] = (df[task_time_col] < suspiciously_fast_threshold).fillna(0).astype(int)
-            df["is_slow"] = (df[task_time_col] > slow_threshold).fillna(0).astype(int)
-            df["is_suspiciously_slow"] = (df[task_time_col] > suspiciously_slow_threshold).fillna(0).astype(int)
+            # Initialize thresholds dictionary (group -> thresholds mapping)
+            thresholds_dict = {}
             
-            # Normal speed: within 1 std dev of mean (between 16th and 84th percentile)
-            df["is_normal_speed"] = (
-                (df[task_time_col] >= fast_threshold) & 
-                (df[task_time_col] <= slow_threshold)
-            ).fillna(0).astype(int)
+            if grouping_col is not None:
+                # Handle missing values by creating separate "unknown" group
+                df[grouping_col + "_grouped"] = df[grouping_col].fillna("unknown")
+                
+                # Calculate thresholds per group
+                for group_value in df[grouping_col + "_grouped"].unique():
+                    group_mask = df[grouping_col + "_grouped"] == group_value
+                    group_times = df.loc[group_mask, task_time_col].dropna()
+                    
+                    # Check if group has sufficient data
+                    if len(group_times) < min_group_size:
+                        # Use global thresholds for small groups
+                        thresholds_dict[group_value] = {
+                            "fast": fast_threshold_global,
+                            "suspiciously_fast": suspiciously_fast_threshold_global,
+                            "slow": slow_threshold_global,
+                            "suspiciously_slow": suspiciously_slow_threshold_global,
+                            "use_global": True
+                        }
+                    elif group_times.nunique() == 1:
+                        # All values in group are identical - mark as special case
+                        thresholds_dict[group_value] = {
+                            "fast": None,
+                            "suspiciously_fast": None,
+                            "slow": None,
+                            "suspiciously_slow": None,
+                            "all_same": True
+                        }
+                    else:
+                        # Calculate group-specific thresholds
+                        thresholds_dict[group_value] = {
+                            "fast": group_times.quantile(0.16),
+                            "suspiciously_fast": group_times.quantile(0.025),
+                            "slow": group_times.quantile(0.84),
+                            "suspiciously_slow": group_times.quantile(0.975),
+                            "use_global": False
+                        }
+                
+                # Apply group-specific thresholds
+                def apply_group_thresholds(row):
+                    group_val = row[grouping_col + "_grouped"]
+                    thresholds = thresholds_dict.get(group_val, {
+                        "fast": fast_threshold_global,
+                        "suspiciously_fast": suspiciously_fast_threshold_global,
+                        "slow": slow_threshold_global,
+                        "suspiciously_slow": suspiciously_slow_threshold_global
+                    })
+                    
+                    task_time = row[task_time_col]
+                    
+                    # Handle case where all values in group are identical
+                    if thresholds.get("all_same", False):
+                        return pd.Series({
+                            "is_fast": 0,
+                            "is_suspiciously_fast": 0,
+                            "is_slow": 0,
+                            "is_suspiciously_slow": 0,
+                            "is_normal_speed": 1 if pd.notna(task_time) else 0
+                        })
+                    
+                    # Handle NaN task times
+                    if pd.isna(task_time):
+                        return pd.Series({
+                            "is_fast": 0,
+                            "is_suspiciously_fast": 0,
+                            "is_slow": 0,
+                            "is_suspiciously_slow": 0,
+                            "is_normal_speed": 0
+                        })
+                    
+                    # Apply thresholds
+                    return pd.Series({
+                        "is_fast": int(task_time < thresholds["fast"]),
+                        "is_suspiciously_fast": int(task_time < thresholds["suspiciously_fast"]),
+                        "is_slow": int(task_time > thresholds["slow"]),
+                        "is_suspiciously_slow": int(task_time > thresholds["suspiciously_slow"]),
+                        "is_normal_speed": int(
+                            thresholds["fast"] <= task_time <= thresholds["slow"]
+                        )
+                    })
+                
+                # Apply thresholds row by row
+                speed_flags = df.apply(apply_group_thresholds, axis=1)
+                df["is_fast"] = speed_flags["is_fast"]
+                df["is_suspiciously_fast"] = speed_flags["is_suspiciously_fast"]
+                df["is_slow"] = speed_flags["is_slow"]
+                df["is_suspiciously_slow"] = speed_flags["is_suspiciously_slow"]
+                df["is_normal_speed"] = speed_flags["is_normal_speed"]
+                
+                # Clean up temporary grouping column
+                df = df.drop(columns=[grouping_col + "_grouped"])
+            else:
+                # No grouping column found - use global thresholds (backward compatible)
+                fast_threshold = fast_threshold_global
+                suspiciously_fast_threshold = suspiciously_fast_threshold_global
+                slow_threshold = slow_threshold_global
+                suspiciously_slow_threshold = suspiciously_slow_threshold_global
+                
+                # Create speed flags (handle NaN values by setting to 0)
+                df["is_fast"] = (df[task_time_col] < fast_threshold).fillna(0).astype(int)
+                df["is_suspiciously_fast"] = (df[task_time_col] < suspiciously_fast_threshold).fillna(0).astype(int)
+                df["is_slow"] = (df[task_time_col] > slow_threshold).fillna(0).astype(int)
+                df["is_suspiciously_slow"] = (df[task_time_col] > suspiciously_slow_threshold).fillna(0).astype(int)
+                
+                # Normal speed: within 1 std dev of mean (between 16th and 84th percentile)
+                df["is_normal_speed"] = (
+                    (df[task_time_col] >= fast_threshold) & 
+                    (df[task_time_col] <= slow_threshold)
+                ).fillna(0).astype(int)
             
-            # Store thresholds for reference (as metadata in a comment or as attributes)
             # For backward compatibility, also create legacy column names
             df["is_very_fast"] = df["is_fast"].copy()
         
