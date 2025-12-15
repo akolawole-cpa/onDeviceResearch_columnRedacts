@@ -70,6 +70,7 @@ cols_to_group:
   - "task_targeting_type"
   - "task_category"
   - "task_points"
+  - "activation_date"
 
 # Columns to drop
 cols_to_drop:
@@ -103,7 +104,6 @@ cols_to_drop:
   - "reference_url"
   - "field_begin_date"
   - "additional"
-  - "activation_date"
   - "auto_deactivate"
   - "sequence_id"
   - "sequence_index"

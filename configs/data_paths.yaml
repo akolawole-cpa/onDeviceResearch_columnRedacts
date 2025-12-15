@@ -23,9 +23,10 @@ output_files:
   wonky_user_counts: "dbfs:/FileStore/misc/wonky_user_counts_pullcomplete.parquet"
   wonky_respondent_df: "dbfs:/FileStore/misc/wonky_respondent_df_pullcomplete.parquet"
   wonky_respondent_summary: "dbfs:/FileStore/misc/wonky_summary_pullcomplete.parquet"
+  respondent_features: "dbfs:/FileStore/misc/respondent_features_eda.parquet"
 
 # Data filters
 filters:
   country: "GB"
-  min_date: "2025-10-10"
+  min_date: "2025-09-11"
   task_origin: "odr"
