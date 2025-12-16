@@ -5,7 +5,7 @@ Functions for aggregating data at different levels.
 """
 
 from pyspark.sql import DataFrame
-from pyspark.sql.functions import count, unix_timestamp
+from pyspark.sql.functions import count, unix_timestamp, col
 from pyspark.sql.window import Window
 from functools import reduce
 from typing import List, Optional
@@ -43,15 +43,17 @@ def enrich_user_info_with_task_counts(
     """
     respondent_window = Window.partitionBy(respondent_id_col)
     
+    # Fix: Use col() to reference columns by name, as unix_timestamp() expects Column objects
+    # Verify that date_completed_col and date_created_col exist in the DataFrame
     enriched = (
         user_info_df
         .withColumn(
             "task_time_taken_s",
-            unix_timestamp(date_completed_col) - unix_timestamp(date_created_col)
+            unix_timestamp(col(date_completed_col)) - unix_timestamp(col(date_created_col))
         )
         .withColumn(
             "task_completed",
-            count(task_id_col).over(respondent_window)
+            count(col(task_id_col)).over(respondent_window)
         )
     )
     
