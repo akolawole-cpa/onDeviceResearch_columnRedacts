@@ -61,51 +61,19 @@ pip install -r requirements.txt
 ### Data Pulling
 
 ```python
-from src.data_pull.loaders import load_user_table, load_task_complete_table
-from src.data_pull.joiners import join_user_task_respondent
-
-# Load data
-user_df = load_user_table(spark, silver_path, country="GB")
-task_df = load_task_complete_table(spark, silver_path, min_date="2025-10-10")
-respondent_df = load_respondent_info_table(spark, silver_path)
-
-# Join tables
-joined_df = join_user_task_respondent(user_df, task_df, respondent_df)
+xxx
 ```
 
 ### EDA and Feature Engineering
 
 ```python
-from src.eda.feature_engineering import create_time_features, create_respondent_behavioral_features
-from src.eda.statistical_tests import compare_groups_statistically
-
-# Create features
-df_with_time = create_time_features(df, date_col="date_completed")
-respondent_features = create_respondent_behavioral_features(df_with_time)
-
-# Statistical tests
-results = compare_groups_statistically(
-    respondent_features,
-    group_col="has_wonky_tasks",
-    metrics=["avg_task_time", "suspicious_fast_rate"]
-)
+xxx
 ```
 
 ### Model Training
 
 ```python
-from src.models.supervised import train_fraud_model
-from src.models.model_evaluation import evaluate_model_performance
-
-# Train model
-model, X_train, X_test, y_train, y_test = train_fraud_model(
-    X, y, method="random_forest"
-)
-
-# Evaluate
-metrics = evaluate_model_performance(
-    y_test, y_pred, y_proba, baseline_fraud_rate=0.15, target_fraud_rate=0.05
-)
+xxx
 ```
 
 ## Configuration
@@ -129,9 +97,6 @@ This repository is configured for Databricks with `databricks.yml`. To connect:
 
 ## License
 
-[Add your license here]
 
 ## Contact
-
-[Add contact information here]
 
