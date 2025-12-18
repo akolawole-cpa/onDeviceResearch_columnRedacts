@@ -4,9 +4,61 @@ Feature Engineering Module
 Functions for creating time-based features, behavioral features, and fraud risk scores.
 """
 
+
 import numpy as np
 import pandas as pd
 from typing import Dict, Optional
+
+
+def create_task_features(
+    df: pd.DataFrame,
+    task_col: str = "totaal_tasks_completed",
+) -> pd.DataFrame:
+    """
+    Create task bin dummy features.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing task_col
+    task_col : str, default "totaal_tasks_completed"
+        Name of the tasks completed column
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with added task bin dummy columns
+    """
+    df = df.copy()
+
+    # Define bins and labels
+    bins = [0, 10, 25, 60, 100, 150, float("inf")]
+    labels = [
+        "total_tasks_1_10",
+        "total_tasks_11_25",
+        "total_tasks_26_60",
+        "total_tasks_61_100",
+        "total_tasks_101_150",
+        "total_tasks_151_plus",
+    ]
+
+    # Categorise
+    task_bins = pd.cut(
+        df[task_col],
+        bins=bins,
+        labels=labels,
+        right=True,
+        include_lowest=True,
+    )
+
+    # One-hot encode into dummy columns
+    task_dummies = pd.get_dummies(task_bins, prefix="", prefix_sep="")
+
+    # Ensure all dummy columns exist (even if 0) and cast to int
+    task_dummies = task_dummies[labels].astype(int)
+    df = pd.concat([df, task_dummies], axis=1)
+
+    return df, labels
 
 
 def create_time_features(df: pd.DataFrame, date_col: str = "date_completed") -> pd.DataFrame:

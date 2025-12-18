@@ -235,7 +235,7 @@ def calculate_wonky_task_ratio(
     wonky_summary_df: pd.DataFrame,
     task_completed_col: str = "task_completed",
     wonky_instances_col: str = "wonky_task_instances",
-    respondent_id_col: str = "respondentPk"
+    respondent_id_col: str = "respondentPk_tc"
 ) -> pd.DataFrame:
     """
     Calculate wonky task ratio for each respondent.
