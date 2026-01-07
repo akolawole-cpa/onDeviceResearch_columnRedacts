@@ -139,7 +139,6 @@ def load_respondent_info_table(
         filters={"country": country}
     )
     
-    # Select respondent_pk and expand profile columns
     df = df.select("respondent_pk", "profile.*")
     
     return df

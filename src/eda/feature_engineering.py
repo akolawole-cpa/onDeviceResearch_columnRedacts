@@ -10,7 +10,7 @@ import pandas as pd
 from typing import Dict, Optional
 
 
-def create_task_features(
+def create_task_amount_features(
     df: pd.DataFrame,
     task_col: str = "totaal_tasks_completed",
 ) -> pd.DataFrame:
@@ -61,7 +61,7 @@ def create_task_features(
     return df, labels
 
 
-def create_time_features(df: pd.DataFrame, date_col: str = "date_completed") -> pd.DataFrame:
+def create_task_temporal_features(df: pd.DataFrame, date_col: str = "date_completed") -> pd.DataFrame:
     """
     Create time-related features from a datetime column.
     
@@ -103,6 +103,113 @@ def create_time_features(df: pd.DataFrame, date_col: str = "date_completed") -> 
     df["is_business_hour_weekend"] = (
         (df["is_business_hour"] == 1) & (df["is_weekend"] == 1)
     ).astype(int)
+    
+    return df
+
+
+def create_all_temporal_features(
+    df: pd.DataFrame, 
+    date_col: str = "date_completed",
+    include_hourly: bool = True
+) -> pd.DataFrame:
+    """
+    Create comprehensive time-related features from a datetime column.
+    
+    Combines day-of-week, business hours, AND hourly features.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame containing the date column
+    date_col : str
+        Name of the datetime column
+    include_hourly : bool
+        If True, includes individual hour indicators (24 features)
+        
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with all temporal features including:
+        - hour_of_day_label: "1am", "2pm", etc.
+        - hour_of_day: numeric (0-23)
+        - is_hour_X features for each hour
+    """
+    
+    df = df.copy()
+    
+    df["hour_of_day"] = df[date_col].dt.hour
+    df["day_of_week"] = df[date_col].dt.dayofweek
+    df["is_weekend"] = (df["day_of_week"] >= 5).astype(int)
+    
+    def format_hour_label(hour):
+        """Convert 24-hour format to 12-hour am/pm format."""
+        if pd.isna(hour):
+            return None
+        
+        hour = int(hour)
+        if hour == 0:
+            return "12am"
+        elif hour < 12:
+            return f"{hour}am"
+        elif hour == 12:
+            return "12pm"
+        else:
+            return f"{hour - 12}pm"
+    
+    df["hour_of_day_label"] = df["hour_of_day"].apply(format_hour_label)
+    
+    df["is_monday"]    = df[date_col].dt.day_name().eq("Monday").astype(int)
+    df["is_tuesday"]   = df[date_col].dt.day_name().eq("Tuesday").astype(int)
+    df["is_wednesday"] = df[date_col].dt.day_name().eq("Wednesday").astype(int)
+    df["is_thursday"]  = df[date_col].dt.day_name().eq("Thursday").astype(int)
+    df["is_friday"]    = df[date_col].dt.day_name().eq("Friday").astype(int)
+    df["is_saturday"]  = df[date_col].dt.day_name().eq("Saturday").astype(int)
+    df["is_sunday"]    = df[date_col].dt.day_name().eq("Sunday").astype(int)
+    
+    df["is_night"] = (
+        (df["hour_of_day"] >= 22) | (df["hour_of_day"] <= 6)
+    ).astype(int)
+    
+    df["is_business_hour"] = (
+        (df["hour_of_day"] >= 9) & (df["hour_of_day"] <= 17)
+    ).astype(int)
+    
+    df["is_business_hour_weekday"] = (
+        (df["is_business_hour"] == 1) & (df["is_weekend"] == 0)
+    ).astype(int)
+    
+    df["is_business_hour_weekend"] = (
+        (df["is_business_hour"] == 1) & (df["is_weekend"] == 1)
+    ).astype(int)
+    
+    if include_hourly:
+        for hour in range(24):
+            hour_label = format_hour_label(hour)
+            df[f"is_hour_{hour}"] = (df["hour_of_day"] == hour).astype(int)
+            df[f"is_{hour_label}"] = (df["hour_of_day"] == hour).astype(int)
+    
+    def categorize_hour_period(hour):
+        if pd.isna(hour):
+            return None
+        elif 0 <= hour < 6:
+            return "night"
+        elif 6 <= hour < 9:
+            return "early_morning"
+        elif 9 <= hour < 12:
+            return "morning"
+        elif 12 <= hour < 17:
+            return "afternoon"
+        elif 17 <= hour < 22:
+            return "evening"
+        else:
+            return "night"
+    
+    df["hour_period"] = df["hour_of_day"].apply(categorize_hour_period)
+    
+    df["is_early_morning"] = (df["hour_period"] == "early_morning").astype(int)
+    df["is_morning"] = (df["hour_period"] == "morning").astype(int)
+    df["is_afternoon"] = (df["hour_period"] == "afternoon").astype(int)
+    df["is_evening"] = (df["hour_period"] == "evening").astype(int)
     
     return df
 
@@ -158,22 +265,18 @@ def create_task_speed_features(
         # - 84th percentile ≈ mean + 1σ (slow)
         # - 97.5th percentile ≈ mean + 2σ (suspiciously slow)
         
-        # Filter out NaN and invalid values for percentile calculation
         valid_times = df[task_time_col].dropna()
         if len(valid_times) == 0:
             raise ValueError(f"No valid values found in '{task_time_col}' column")
         
-        # Check if all values are the same (would make percentiles meaningless)
         if valid_times.nunique() == 1:
-            # If all values are the same, set all flags appropriately
             df["is_fast"] = 0
             df["is_suspiciously_fast"] = 0
             df["is_slow"] = 0
             df["is_suspiciously_slow"] = 0
-            df["is_normal_speed"] = 1  # All tasks are "normal" if they're all the same
+            df["is_normal_speed"] = 1 
             df["is_very_fast"] = 0
         else:
-            # Detect grouping column
             grouping_col = None
             if group_by_col is not None:
                 if group_by_col in df.columns:
@@ -181,27 +284,21 @@ def create_task_speed_features(
             elif "task_length_of_task" in df.columns:
                 grouping_col = "task_length_of_task"
             
-            # Calculate global thresholds as fallback
             fast_threshold_global = valid_times.quantile(0.16)
             suspiciously_fast_threshold_global = valid_times.quantile(0.025)
             slow_threshold_global = valid_times.quantile(0.84)
             suspiciously_slow_threshold_global = valid_times.quantile(0.975)
             
-            # Initialize thresholds dictionary (group -> thresholds mapping)
             thresholds_dict = {}
             
             if grouping_col is not None:
-                # Handle missing values by creating separate "unknown" group
                 df[grouping_col + "_grouped"] = df[grouping_col].fillna("unknown")
                 
-                # Calculate thresholds per group
                 for group_value in df[grouping_col + "_grouped"].unique():
                     group_mask = df[grouping_col + "_grouped"] == group_value
                     group_times = df.loc[group_mask, task_time_col].dropna()
                     
-                    # Check if group has sufficient data
                     if len(group_times) < min_group_size:
-                        # Use global thresholds for small groups
                         thresholds_dict[group_value] = {
                             "fast": fast_threshold_global,
                             "suspiciously_fast": suspiciously_fast_threshold_global,
@@ -210,7 +307,6 @@ def create_task_speed_features(
                             "use_global": True
                         }
                     elif group_times.nunique() == 1:
-                        # All values in group are identical - mark as special case
                         thresholds_dict[group_value] = {
                             "fast": None,
                             "suspiciously_fast": None,
@@ -219,7 +315,6 @@ def create_task_speed_features(
                             "all_same": True
                         }
                     else:
-                        # Calculate group-specific thresholds
                         thresholds_dict[group_value] = {
                             "fast": group_times.quantile(0.16),
                             "suspiciously_fast": group_times.quantile(0.025),
@@ -228,7 +323,6 @@ def create_task_speed_features(
                             "use_global": False
                         }
                 
-                # Apply group-specific thresholds
                 def apply_group_thresholds(row):
                     group_val = row[grouping_col + "_grouped"]
                     thresholds = thresholds_dict.get(group_val, {
@@ -240,7 +334,6 @@ def create_task_speed_features(
                     
                     task_time = row[task_time_col]
                     
-                    # Handle case where all values in group are identical
                     if thresholds.get("all_same", False):
                         return pd.Series({
                             "is_fast": 0,
@@ -250,7 +343,6 @@ def create_task_speed_features(
                             "is_normal_speed": 1 if pd.notna(task_time) else 0
                         })
                     
-                    # Handle NaN task times
                     if pd.isna(task_time):
                         return pd.Series({
                             "is_fast": 0,
@@ -260,7 +352,6 @@ def create_task_speed_features(
                             "is_normal_speed": 0
                         })
                     
-                    # Apply thresholds
                     return pd.Series({
                         "is_fast": int(task_time < thresholds["fast"]),
                         "is_suspiciously_fast": int(task_time < thresholds["suspiciously_fast"]),
@@ -271,7 +362,6 @@ def create_task_speed_features(
                         )
                     })
                 
-                # Apply thresholds row by row
                 speed_flags = df.apply(apply_group_thresholds, axis=1)
                 df["is_fast"] = speed_flags["is_fast"]
                 df["is_suspiciously_fast"] = speed_flags["is_suspiciously_fast"]
@@ -279,32 +369,25 @@ def create_task_speed_features(
                 df["is_suspiciously_slow"] = speed_flags["is_suspiciously_slow"]
                 df["is_normal_speed"] = speed_flags["is_normal_speed"]
                 
-                # Clean up temporary grouping column
                 df = df.drop(columns=[grouping_col + "_grouped"])
             else:
-                # No grouping column found - use global thresholds (backward compatible)
                 fast_threshold = fast_threshold_global
                 suspiciously_fast_threshold = suspiciously_fast_threshold_global
                 slow_threshold = slow_threshold_global
                 suspiciously_slow_threshold = suspiciously_slow_threshold_global
                 
-                # Create speed flags (handle NaN values by setting to 0)
                 df["is_fast"] = (df[task_time_col] < fast_threshold).fillna(0).astype(int)
                 df["is_suspiciously_fast"] = (df[task_time_col] < suspiciously_fast_threshold).fillna(0).astype(int)
                 df["is_slow"] = (df[task_time_col] > slow_threshold).fillna(0).astype(int)
                 df["is_suspiciously_slow"] = (df[task_time_col] > suspiciously_slow_threshold).fillna(0).astype(int)
                 
-                # Normal speed: within 1 std dev of mean (between 16th and 84th percentile)
                 df["is_normal_speed"] = (
                     (df[task_time_col] >= fast_threshold) & 
                     (df[task_time_col] <= slow_threshold)
                 ).fillna(0).astype(int)
             
-            # For backward compatibility, also create legacy column names
             df["is_very_fast"] = df["is_fast"].copy()
         
-        # Store calculated thresholds as attributes for potential future reference
-        # (Note: DataFrame attributes aren't preserved, but we'll use them in the notebook)
     else:
         # Legacy hardcoded thresholds (for backward compatibility)
         suspicious_threshold = 30.0
@@ -315,309 +398,12 @@ def create_task_speed_features(
         df["is_very_fast"] = (df[task_time_col] < very_fast_threshold).astype(int)
         df["is_very_slow"] = (df["task_time_minutes"] > very_slow_threshold / 60).astype(int)
     
-    # Points per minute
-    # Protect against division by zero (tasks with 0 time would produce inf/nan)
     if "task_points" in df.columns:
         df["task_points_perMinute"] = (
             df["task_points"] / df["task_time_minutes"].replace(0, np.nan)
         )
     
     return df
-
-
-def create_respondent_behavioral_features(
-    df: pd.DataFrame,
-    respondent_id_col: str = "respondentPk",
-    date_col: str = "date_completed",
-    categorical_cols: list = None,
-    config: Optional[Dict] = None
-) -> pd.DataFrame:
-    """
-    Aggregate task-level data to create respondent-level behavioral features.
-    
-    Parameters:
-    -----------
-    df : pd.DataFrame
-        Task-level DataFrame
-    respondent_id_col : str
-        Name of the respondent ID column
-    date_col : str
-        Name of the date column
-    categorical_cols : list
-        List of categorical column names to include in grouping and preserve in output.
-        Examples: ['platform_name', 'hardware_version', 'survey_locale']
-    config : dict, optional
-        Configuration dictionary with thresholds and parameters
-        
-    Returns:
-    --------
-    pd.DataFrame
-        Respondent-level DataFrame with behavioral features and demographic columns
-    """
-    if config is None:
-        config = {}
-    
-    # Handle None demographic_cols
-    if categorical_cols is None:
-        categorical_cols = []
-    
-    # Filter demographic columns to only those that exist in the dataframe
-    available_categorical_cols = [
-        col for col in categorical_cols 
-        if col in df.columns and col != respondent_id_col
-    ]
-    
-    # Sort by respondent ID, demographics (if any), and date
-    sort_cols = [respondent_id_col] + available_categorical_cols + [date_col]
-    df = df.sort_values(by=sort_cols)
-
-    print(df.shape)
-    
-    # Aggregation dictionary for behavioral features
-    agg_dict = {
-        "taskPk": "count",
-        "task_time_taken_s": ["mean", "std", "min", "max", "median"],
-        "task_time_taken_s_adj": ["mean", "std", "min", "max", "median"],
-        "task_points_perMinute": ["mean", "std", "min", "max", "median"],
-        "is_suspiciously_fast": "sum",
-        "is_very_fast": "sum",
-        "is_fast": "sum",  # New: 1 std dev below mean
-        "is_slow": "sum",  # New: 1 std dev above mean
-        "is_suspiciously_slow": "sum",  # New: 2 std dev above mean
-        "is_normal_speed": "sum",  # New: within 1 std dev of mean (16th-84th percentile)
-        "is_night": "sum",
-        "is_weekend": "sum",
-        "risk": ["mean", "max"],
-        "quality": ["mean", "max"],
-        "wonky_study_flag": "max",
-        "wonky_study_count": "sum",
-        "days_active_before_task": "mean",
-        date_col: ["min", "max"],
-    }
-    
-    # Filter to only include columns that exist
-    filtered_agg_dict = {
-        k: v for k, v in agg_dict.items() 
-        if k in df.columns
-    }
-    
-    # Group by ONLY respondent ID (matching original behavior)
-    # This ensures one row per respondent regardless of demographic variations
-    respondent_features = (
-        df.groupby(respondent_id_col)
-        .agg(filtered_agg_dict)
-        .reset_index()
-    )
-
-    print(respondent_features.shape)
-    
-    # Flatten column names
-    # Aggregated columns are tuples like ('taskPk', 'count')
-    flattened_cols = []
-    for col in respondent_features.columns.values:
-        if isinstance(col, tuple):
-            # Aggregated column: join tuple elements
-            flattened_cols.append("_".join(str(c) for c in col).strip("_"))
-        else:
-            # Grouping column (respondent_id_col): keep as string
-            flattened_cols.append(str(col))
-    respondent_features.columns = flattened_cols
-    
-    # Add demographic columns by taking the mode (most common value) per respondent
-    # If mode is not available (all NaN), use first value
-    if available_categorical_cols:
-        def get_mode_or_first(series):
-            """Get mode if available, otherwise first non-null value, otherwise first value."""
-            # Remove NaN values for mode calculation
-            non_null = series.dropna()
-            if len(non_null) > 0:
-                mode_values = non_null.mode()
-                if len(mode_values) > 0:
-                    return mode_values.iloc[0]
-                else:
-                    return non_null.iloc[0]
-            else:
-                # All NaN, return first value (which is NaN)
-                return series.iloc[0] if len(series) > 0 else None
-        
-        categorical_agg = {}
-        for col in available_categorical_cols:
-            if col in df.columns:
-                categorical_agg[col] = get_mode_or_first
-        
-        if categorical_agg:
-            categorical_features = (
-                df.groupby(respondent_id_col)
-                .agg(categorical_agg)
-                .reset_index()
-            )
-            # Merge demographic columns into respondent_features
-            respondent_features = respondent_features.merge(
-                categorical_features,
-                on=respondent_id_col,
-                how='left'
-            )
-    
-    # Rename columns
-    rename_dict = {
-        "taskPk_count": "total_tasks",
-        "task_time_taken_s_mean": "avg_task_time",
-        "task_time_taken_s_std": "std_task_time",
-        "task_time_taken_s_min": "min_task_time",
-        "task_time_taken_s_max": "max_task_time",
-        "task_time_taken_s_median": "median_task_time",
-        "task_time_taken_s_adj_mean": "avg_task_time_adj",
-        "task_time_taken_s_adj_std": "std_task_time_adj",
-        "task_time_taken_s_adj_min": "min_task_time_adj",
-        "task_time_taken_s_adj_max": "max_task_time_adj",
-        "task_time_taken_s_adj_median": "median_task_time_adj",
-        "task_points_perMinute_mean": "avg_task_pointsPerMin",
-        "task_points_perMinute_std": "std_task_pointsPerMin",
-        "task_points_perMinute_min": "min_task_pointsPerMin",
-        "task_points_perMinute_max": "max_task_pointsPerMin",
-        "task_points_perMinute_median": "median_task_pointsPerMin",
-        "is_suspiciously_fast_sum": "suspicious_fast_count",
-        "is_very_fast_sum": "very_fast_count",
-        "is_fast_sum": "fast_count",
-        "is_slow_sum": "slow_count",
-        "is_suspiciously_slow_sum": "suspiciously_slow_count",
-        "is_normal_speed_sum": "normal_speed_count",
-        "is_night_sum": "night_task_count",
-        "is_weekend_sum": "weekend_task_count",
-        "risk_mean": "avg_risk",
-        "risk_max": "max_risk",
-        "quality_mean": "avg_quality",
-        "quality_max": "max_quality",
-        "wonky_study_flag_max": "wonky_study_flag",
-        "wonky_study_count_sum": "wonky_study_count",
-        f"{date_col}_min": "first_task_date",
-        f"{date_col}_max": "last_task_date",
-    }
-    
-    # Only rename columns that exist
-    rename_dict = {k: v for k, v in rename_dict.items() if k in respondent_features.columns}
-    respondent_features = respondent_features.rename(columns=rename_dict)
-    
-    # Calculate rates
-    if "total_tasks" in respondent_features.columns:
-        if "suspicious_fast_count" in respondent_features.columns:
-            respondent_features["suspicious_fast_rate"] = (
-                respondent_features["suspicious_fast_count"] / respondent_features["total_tasks"]
-            )
-        if "very_fast_count" in respondent_features.columns:
-            respondent_features["very_fast_rate"] = (
-                respondent_features["very_fast_count"] / respondent_features["total_tasks"]
-            )
-        if "fast_count" in respondent_features.columns:
-            respondent_features["fast_rate"] = (
-                respondent_features["fast_count"] / respondent_features["total_tasks"]
-            )
-        if "slow_count" in respondent_features.columns:
-            respondent_features["slow_rate"] = (
-                respondent_features["slow_count"] / respondent_features["total_tasks"]
-            )
-        if "suspiciously_slow_count" in respondent_features.columns:
-            respondent_features["suspiciously_slow_rate"] = (
-                respondent_features["suspiciously_slow_count"] / respondent_features["total_tasks"]
-            )
-        if "normal_speed_count" in respondent_features.columns:
-            respondent_features["normal_speed_rate"] = (
-                respondent_features["normal_speed_count"] / respondent_features["total_tasks"]
-            )
-        if "night_task_count" in respondent_features.columns:
-            respondent_features["night_task_rate"] = (
-                respondent_features["night_task_count"] / respondent_features["total_tasks"]
-            )
-        if "weekend_task_count" in respondent_features.columns:
-            respondent_features["weekend_task_rate"] = (
-                respondent_features["weekend_task_count"] / respondent_features["total_tasks"]
-            )
-    
-    # Coefficient of variation
-    if "std_task_time" in respondent_features.columns and "avg_task_time" in respondent_features.columns:
-        respondent_features["task_time_cv"] = (
-            respondent_features["std_task_time"] / 
-            respondent_features["avg_task_time"].replace(0, np.nan)
-        )
-    
-    if "std_task_pointsPerMin" in respondent_features.columns and "avg_task_pointsPerMin" in respondent_features.columns:
-        respondent_features["task_ppm_cv"] = (
-            respondent_features["std_task_pointsPerMin"] / 
-            respondent_features["avg_task_pointsPerMin"].replace(0, np.nan)
-        )
-    
-    # Days active and tasks per day
-    if "first_task_date" in respondent_features.columns and "last_task_date" in respondent_features.columns:
-        respondent_features["days_active"] = (
-            respondent_features["last_task_date"] - respondent_features["first_task_date"]
-        ).dt.days + 1
-        respondent_features["tasks_per_days_active_all"] = (
-            respondent_features["total_tasks"] / respondent_features["days_active"]
-        )
-    
-    # Volume thresholds
-    high_vol_percentile = config.get("high_volume_percentile", 0.95)
-    extreme_vol_percentile = config.get("extreme_volume_percentile", 0.99)
-    
-    if "total_tasks" in respondent_features.columns:
-        high_vol_thresh = respondent_features["total_tasks"].quantile(high_vol_percentile)
-        extreme_vol_thresh = respondent_features["total_tasks"].quantile(extreme_vol_percentile)
-        
-        respondent_features["is_high_volume"] = (
-            respondent_features["total_tasks"] > high_vol_thresh
-        ).astype(int)
-        respondent_features["is_extreme_volume"] = (
-            respondent_features["total_tasks"] > extreme_vol_thresh
-        ).astype(int)
-    
-    if "avg_task_pointsPerMin" in respondent_features.columns:
-        points_perMin_thresh = respondent_features["avg_task_pointsPerMin"].quantile(high_vol_percentile)
-        respondent_features["is_high_pointsPerMinute"] = (
-            respondent_features["avg_task_pointsPerMin"] > points_perMin_thresh
-        ).astype(int)
-    
-    # Velocity tiers
-    velocity_bins = config.get("velocity_bins", [0, 1, 3, 5, 10, np.inf])
-    velocity_labels = config.get("velocity_labels", ["Very_Low", "Low", "Medium", "High", "Very_High"])
-    
-    # Convert string 'inf' from YAML to np.inf for pandas compatibility
-    # Also ensure all values are numeric and bins are monotonically increasing
-    if isinstance(velocity_bins, list):
-        converted_bins = []
-        for x in velocity_bins:
-            if isinstance(x, str) and x.lower() in ['inf', 'infinity']:
-                converted_bins.append(np.inf)
-            elif isinstance(x, (int, float)):
-                converted_bins.append(float(x))
-            else:
-                # Try to convert to float, fallback to np.inf if fails
-                try:
-                    converted_bins.append(float(x))
-                except (ValueError, TypeError):
-                    converted_bins.append(np.inf)
-        velocity_bins = converted_bins
-    
-    # Ensure bins are monotonically increasing (safety check)
-    # Convert to list of floats, remove duplicates while preserving order, then sort
-    seen = set()
-    unique_bins = []
-    for x in velocity_bins:
-        if x not in seen:
-            seen.add(x)
-            unique_bins.append(x)
-    velocity_bins = sorted(unique_bins)  # Sort to ensure monotonic increase
-    
-    if "tasks_per_days_active_all" in respondent_features.columns:
-        try:
-            respondent_features["velocity_tier"] = pd.cut(
-                respondent_features["tasks_per_days_active_all"],
-                bins=velocity_bins,
-                labels=velocity_labels,
-            )
-        except:
-            pass
-    
-    return respondent_features
 
 
 def add_wonky_features(
@@ -654,7 +440,6 @@ def add_wonky_features(
         how='left'
     )
     
-    # Fill NaN with 0
     for col in available_cols:
         if col in df.columns:
             df[col] = df[col].fillna(0)
@@ -900,4 +685,54 @@ def create_wonky_risk_score(
         include_lowest=True
     )
     
+    return df
+
+
+def add_rating_delta(
+    df: pd.DataFrame, feature: str, delta_period: int | str = 1
+) -> pd.DataFrame:
+    """
+    Add a '{rating}_delta' column representing the change in {rating}
+    from a previous task to the current task for each respondent.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Must contain ['respondentPk', 'date_completed', f'{rating}'].
+    delta_period : int or 'max', default 1
+        - int (1, 2, 3, ...): Look back N tasks.
+            Current {rating} - {rating} from N tasks ago.
+        - 'max': Current {rating} - earliest {rating} (first task).
+    feature: str
+        Must be one of ['quality', 'risk'].
+
+    Returns
+    -------
+    pd.DataFrame
+        Original dataframe with f'{rating}_delta' column added.
+    """
+
+    if feature not in ["quality", "risk"]:
+        raise ValueError(
+            f"Invalid feature: {feature}. Must be one of ['quality', 'risk']."
+        )
+
+    # Sort by respondent and date
+    df = df.sort_values(["respondentPk", "date_completed"]).copy()
+
+    if delta_period == "max":
+        # Compare to earliest quality for each respondent
+        df[f"{feature}_delta"] = df[f"{feature}"] - df.groupby("respondentPk")[
+            f"{feature}"
+        ].transform("first")
+    elif isinstance(delta_period, int) and delta_period >= 1:
+        # Compare to quality from N periods ago
+        df[f"{feature}_delta"] = df.groupby("respondentPk")[f"{feature}"].diff(
+            periods=delta_period
+        )
+    else:
+        raise ValueError("delta_period must be a positive integer or 'max'")
+
+    print(f'Rating delta added for {feature} for {delta_period} period(s).')
+
     return df
