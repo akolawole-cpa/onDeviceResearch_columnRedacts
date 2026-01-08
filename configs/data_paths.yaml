@@ -17,14 +17,19 @@ tables:
   respondent_info: "respondent_info"
   task: "task"
 
-# Output file paths
+# Output file paths (saved in misc folder)
 output_files:
-  user_info_df: "user_info_df_pullcomplete.parquet"
-  wonky_user_counts: "wonky_user_counts_pullcomplete.parquet"
+  user_info_df: "dbfs:/FileStore/misc/user_info_df_pullcomplete.parquet"
+  user_info_df_post_eda: "dbfs:/FileStore/misc/user_info_df_post_eda.parquet"
+  wonky_user_counts: "dbfs:/FileStore/misc/wonky_user_counts_pullcomplete.parquet"
+  wonky_respondent_df: "dbfs:/FileStore/misc/wonky_respondent_df_pullcomplete.parquet"
+  wonky_respondent_summary: "dbfs:/FileStore/misc/wonky_summary_pullcomplete.parquet"
+  respondent_features: "dbfs:/FileStore/misc/respondent_features_eda.parquet"
+  wonky_map: "dbfs:/FileStore/misc/wonky_map.parquet"
+  test_results_df: "dbfs:/FileStore/misc/testing_df.parquet"
 
 # Data filters
 filters:
   country: "GB"
-  min_date: "2025-10-10"
+  min_date: "2025-05-08"
   task_origin: "odr"
-

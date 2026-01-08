@@ -1,36 +1,278 @@
 # Statistical Tests Configuration
 
-# Significance level
-significance_level: 0.05
+feature_sets:
+  tasks_completed:
+    - total_tasks_1_10
+    - total_tasks_11_25
+    - total_tasks_26_60
+    - total_tasks_61_100
+    - total_tasks_101_150
+    - total_tasks_151_plus
 
-# Test metrics to compare between groups
-test_metrics:
-  - avg_task_time
-  - suspicious_fast_rate
-  - total_tasks
-  - tasks_per_day
-  - task_time_cv
-  - task_ppm_cv
-  - avg_quality
-  - avg_risk
-  - night_task_rate
-  - weekend_task_rate
-  - avg_task_pointsPerMin
+  days_active_buckets:
+    - days_active_<2
+    - days_active_<7
+    - days_active_<14
+    - days_active_<21
+    - days_active_<28
+    - days_active_<31
+    - days_active_<50
+    - days_active_>=_50
 
-# Group comparison settings
-group_comparison:
-  group_col: "has_wonky_tasks"
-  group1_value: 1  # Wonky users
-  group2_value: 0  # Non-wonky users
+  days_active:
+    - days_active_0
+    - days_active_1
+    - days_active_2
+    - days_active_3
+    - days_active_4
+    - days_active_5
+    - days_active_6
+    - days_active_7
+    - days_active_8
+    - days_active_9
+    - days_active_10
+    - days_active_11
+    - days_active_12
+    - days_active_13
+    - days_active_14
+    - days_active_15
+    - days_active_16
+    - days_active_17
+    - days_active_18
+    - days_active_19
+    - days_active_20
+    - days_active_21
+    - days_active_22
+    - days_active_23
+    - days_active_24
+    - days_active_25
+    - days_active_26
+    - days_active_27
+    - days_active_28
+    - days_active_29
+    - days_active_30
+    - days_active_31
+    - days_active_32
+    - days_active_33
+    - days_active_34
+    - days_active_35
+    - days_active_36
+    - days_active_37
+    - days_active_38
+    - days_active_39
+    - days_active_40
+    - days_active_41
+    - days_active_42
+    - days_active_43
+    - days_active_44
+    - days_active_45
+    - days_active_46
+    - days_active_47
+    - days_active_48
+    - days_active_49
+    - days_active_50
+    - days_active_51
+    - days_active_52
+    - days_active_53
+    - days_active_54
+    - days_active_55
+    - days_active_56
+    - days_active_57
+    - days_active_58
+    - days_active_59
+    - days_active_60
+    - days_active_61
+    - days_active_62
+    - days_active_63
+    - days_active_64
+    - days_active_65
+    - days_active_66
+    - days_active_67
+    - days_active_68
+    - days_active_69
+    - days_active_70
+    - days_active_71
+    - days_active_72
+    - days_active_73
+    - days_active_74
+    - days_active_75
+    - days_active_76
+    - days_active_77
+    - days_active_78
+    - days_active_79
+    - days_active_80
+    - days_active_81
+    - days_active_82
+    - days_active_83
+    - days_active_84
+    - days_active_85
+    - days_active_86
+    - days_active_87
+    - days_active_88
+    - days_active_89
+    - days_active_90
+    - days_active_91
+    - days_active_92
+    - days_active_93
+    - days_active_94
+    - days_active_95
+    - days_active_96
+    - days_active_97
+    - days_active_98
+    - days_active_99
 
-# Threshold analysis settings
-threshold_analysis:
-  default_bins: 10
-  quantile_method: "first"
+  temporal_features1:
+    - is_weekend
+    - is_business_hour
+    - is_business_hour_weekday
+    - is_business_hour_weekend
+    - is_monday
+    - is_tuesday
+    - is_wednesday
+    - is_thursday
+    - is_friday
+    - is_saturday
+    - is_sunday
 
-# Effect size thresholds (for interpretation)
-effect_size_thresholds:
-  small: 0.2
-  medium: 0.5
-  large: 0.8
+  temporal_features2:
+    - is_afternoon
+    - is_early_morning
+    - is_evening
+    - is_morning
+    - is_night
 
+  temporal_features3:
+    - is_10am
+    - is_10pm
+    - is_11am
+    - is_11pm
+    - is_12am
+    - is_12pm
+    - is_1am
+    - is_1pm
+    - is_2am
+    - is_2pm
+    - is_3am
+    - is_3pm
+    - is_4am
+    - is_4pm
+    - is_5am
+    - is_5pm
+    - is_6am
+    - is_6pm
+    - is_7am
+    - is_7pm
+    - is_8am
+    - is_8pm
+    - is_9am
+    - is_9pm
+
+  gambling:
+    - bingo
+    - car race betting
+    - casino poker
+    - casino slot machines
+    - do not gamble at all
+    - horse track betting
+    - offline lottery
+    - offline sports betting
+    - online lottery
+    - online poker
+    - online sports betting
+    - other
+
+  income_buckets:
+    - "Less than £35k"
+    - "£35k to £49k"
+    - "£50k to £79k"
+    - "£80k to £99k"
+    - "£100k or more"
+    - "Prefer not to answer"
+    - "unknown."
+
+  gender:
+    - gender_male
+    - gender_female
+    - gender_other
+    - prefer_not_to_say
+
+  risk:
+    - risk=100
+    - risk<90
+    - risk<80
+    - risk<50
+
+  quality:
+    - quality=100
+    - quality<90
+    - quality<75
+    - quality<50
+    - quality<30
+
+  quality_delta:
+    - quality_delta_LargePostive
+    - quality_delta_Postive
+    - quality_delta_Neutral
+    - quality_delta_LargeNegative
+    - quality_delta_Negative
+
+  risk_delta:
+    - risk_delta_LargePostive
+    - risk_delta_Postive
+    - risk_delta_Neutral
+    - risk_delta_LargeNegative
+    - risk_delta_Negative
+
+  task_speed:
+    - is_suspiciously_fast
+    - is_fast
+    - is_normal_speed
+    - is_slow
+    - is_suspiciously_slow
+
+  hardware:
+    - Desktop
+    - Android
+    - Macintosh
+    - P8 Standard
+    - RocStar
+    - iPhone
+    - iPod Touch
+
+  exposure_bands:
+    - exposure_control
+    - exposure_exposed
+
+  entry_point:
+    - entryPoint_offerwall
+    - entryPoint_notification
+
+  email_verification:
+    - email_verified_False
+    - email_verified_True
+
+  share_location_data:
+    - share_location_data_False
+    - share_location_data_True
+
+  platform:
+    - Android
+    - Linux
+    - Mac OS X
+    - Unknown
+    - iOS
+
+  notify_new_task:
+    - notify_new_task_False
+    - notify_new_task_True
+
+  notify_task_payout:
+    - notify_task_payout_False
+    - notify_task_payout_True
+  
+  ip_addr_count:
+    - "ip_addr_count_1"
+    - "ip_addr_count_2"
+    - "ip_addr_count_3"
+    - "ip_addr_count_4"
+    - "ip_addr_count_5"
