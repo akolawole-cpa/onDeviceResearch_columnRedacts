@@ -121,9 +121,8 @@ feature_sets:
     - days_active_98
     - days_active_99
 
-  temporal_features:
+  temporal_features1:
     - is_weekend
-    - is_night
     - is_business_hour
     - is_business_hour_weekday
     - is_business_hour_weekend
@@ -134,6 +133,39 @@ feature_sets:
     - is_friday
     - is_saturday
     - is_sunday
+
+  temporal_features2:
+    - is_afternoon
+    - is_early_morning
+    - is_evening
+    - is_morning
+    - is_night
+
+  temporal_features3:
+    - is_10am
+    - is_10pm
+    - is_11am
+    - is_11pm
+    - is_12am
+    - is_12pm
+    - is_1am
+    - is_1pm
+    - is_2am
+    - is_2pm
+    - is_3am
+    - is_3pm
+    - is_4am
+    - is_4pm
+    - is_5am
+    - is_5pm
+    - is_6am
+    - is_6pm
+    - is_7am
+    - is_7pm
+    - is_8am
+    - is_8pm
+    - is_9am
+    - is_9pm
 
   gambling:
     - bingo
@@ -239,12 +271,8 @@ feature_sets:
     - notify_task_payout_True
   
   ip_addr_count:
-    - "ip_addr_count_0"
     - "ip_addr_count_1"
     - "ip_addr_count_2"
     - "ip_addr_count_3"
     - "ip_addr_count_4"
     - "ip_addr_count_5"
-
-  total_tasks:
-    - ""
