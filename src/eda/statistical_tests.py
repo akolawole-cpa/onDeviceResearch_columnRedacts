@@ -15,7 +15,6 @@ from statsmodels.stats.sandwich_covariance import cov_cluster
 from scipy.stats import mannwhitneyu, ttest_ind, chi2_contingency, norm
 from typing import List, Dict, Optional, Tuple
 
-# Try to import statsmodels for two-proportion z-test (more robust)
 try:
     from statsmodels.stats.proportion import proportions_ztest
 
