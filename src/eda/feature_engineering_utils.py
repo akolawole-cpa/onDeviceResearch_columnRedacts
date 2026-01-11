@@ -1,5 +1,11 @@
 """utils for feature engineering"""
 
+
+import pandas as pd
+import numpy as np
+from typing import List, Tuple, Optional, Dict
+
+
 def one_hot_encode_column(
     df: pd.DataFrame,
     column: str,
@@ -268,7 +274,6 @@ def batch_one_hot_encode(
         dummies = dummies.add_prefix(f'{col}_')
         all_dummies.append(dummies)
     
-    # Concatenate all dummies at once to avoid fragmentation
     if all_dummies:
         combined_dummies = pd.concat(all_dummies, axis=1)
         df = pd.concat([df, combined_dummies], axis=1)
@@ -322,7 +327,6 @@ def create_value_mapping_and_encode(
     return df, None
 
 
-# Convenience function for common quality/risk threshold patterns
 def create_score_features(
     df: pd.DataFrame,
     column: str,
@@ -354,3 +358,49 @@ def create_score_features(
     ])
     
     return create_threshold_features(df, column, threshold_specs)
+  
+
+def filter_to_engineered_features(
+    df, 
+    original_columns: set,
+    id_column: str = 'respondentPk',
+    additional_columns: list = None
+):
+    """
+    Filter dataframe to keep only the ID column and engineered features.
+    
+    Args:
+        df: DataFrame after feature engineering
+        original_columns: Set of column names from before feature engineering
+        id_column: Name of the ID column to keep (default: 'respondentPk')
+        additional_columns: Optional list of additional columns to keep
+    
+    Returns:
+        Filtered DataFrame with only ID and engineered columns
+    
+    Example:
+        # At the start of notebook:
+        original_columns = set(user_info_df.columns)
+        
+        # ... do all feature engineering ...
+        
+        # At the end:
+        user_info_df_final = filter_to_engineered_features(
+            user_info_df, 
+            original_columns,
+            id_column='respondentPk'
+        )
+    """
+    engineered_cols = [col for col in df.columns if col not in original_columns]
+    
+    final_cols = [id_column] + engineered_cols
+    
+    if additional_columns:
+        for col in additional_columns:
+            if col in df.columns and col not in final_cols:
+                final_cols.append(col)
+    
+    seen = set()
+    final_cols = [x for x in final_cols if not (x in seen or seen.add(x))]
+    
+    return df[final_cols]

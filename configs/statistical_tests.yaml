@@ -1,131 +1,40 @@
 # Statistical Tests Configuration
 
 feature_sets:
+  # ============================================================================
+  # TASK COMPLETION FEATURES
+  # ============================================================================
   tasks_completed:
     - total_tasks_1_10
     - total_tasks_11_25
-    - total_tasks_26_60
-    - total_tasks_61_100
-    - total_tasks_101_150
-    - total_tasks_151_plus
+    - total_tasks_26_75
+    - total_tasks_76_125
+    - total_tasks_126_175
+    - total_tasks_176_225
+    - total_tasks_226_plus
 
+  # ============================================================================
+  # DAYS ACTIVE FEATURES (binned)
+  # ============================================================================
   days_active_buckets:
     - days_active_<2
-    - days_active_<7
-    - days_active_<14
-    - days_active_<21
-    - days_active_<28
-    - days_active_<31
+    - days_active_<10
+    - days_active_<20
+    - days_active_<30
     - days_active_<50
-    - days_active_>=_50
+    - days_active_<75
+    - days_active_<100
+    - days_active_<125
+    - days_active_<150
+    - days_active_<200
+    - days_active_<250
+    - days_active_>=250
 
-  days_active:
-    - days_active_0
-    - days_active_1
-    - days_active_2
-    - days_active_3
-    - days_active_4
-    - days_active_5
-    - days_active_6
-    - days_active_7
-    - days_active_8
-    - days_active_9
-    - days_active_10
-    - days_active_11
-    - days_active_12
-    - days_active_13
-    - days_active_14
-    - days_active_15
-    - days_active_16
-    - days_active_17
-    - days_active_18
-    - days_active_19
-    - days_active_20
-    - days_active_21
-    - days_active_22
-    - days_active_23
-    - days_active_24
-    - days_active_25
-    - days_active_26
-    - days_active_27
-    - days_active_28
-    - days_active_29
-    - days_active_30
-    - days_active_31
-    - days_active_32
-    - days_active_33
-    - days_active_34
-    - days_active_35
-    - days_active_36
-    - days_active_37
-    - days_active_38
-    - days_active_39
-    - days_active_40
-    - days_active_41
-    - days_active_42
-    - days_active_43
-    - days_active_44
-    - days_active_45
-    - days_active_46
-    - days_active_47
-    - days_active_48
-    - days_active_49
-    - days_active_50
-    - days_active_51
-    - days_active_52
-    - days_active_53
-    - days_active_54
-    - days_active_55
-    - days_active_56
-    - days_active_57
-    - days_active_58
-    - days_active_59
-    - days_active_60
-    - days_active_61
-    - days_active_62
-    - days_active_63
-    - days_active_64
-    - days_active_65
-    - days_active_66
-    - days_active_67
-    - days_active_68
-    - days_active_69
-    - days_active_70
-    - days_active_71
-    - days_active_72
-    - days_active_73
-    - days_active_74
-    - days_active_75
-    - days_active_76
-    - days_active_77
-    - days_active_78
-    - days_active_79
-    - days_active_80
-    - days_active_81
-    - days_active_82
-    - days_active_83
-    - days_active_84
-    - days_active_85
-    - days_active_86
-    - days_active_87
-    - days_active_88
-    - days_active_89
-    - days_active_90
-    - days_active_91
-    - days_active_92
-    - days_active_93
-    - days_active_94
-    - days_active_95
-    - days_active_96
-    - days_active_97
-    - days_active_98
-    - days_active_99
-
-  temporal_features1:
+  # ============================================================================
+  # TEMPORAL FEATURES
+  # ============================================================================
+  temporal_day_of_week:
     - is_weekend
-    - is_business_hour
-    - is_business_hour_weekday
-    - is_business_hour_weekend
     - is_monday
     - is_tuesday
     - is_wednesday
@@ -134,74 +43,58 @@ feature_sets:
     - is_saturday
     - is_sunday
 
-  temporal_features2:
-    - is_afternoon
+  temporal_business_hours:
+    - is_business_hour
+    - is_business_hour_weekday
+    - is_business_hour_weekend
+
+  temporal_time_of_day:
     - is_early_morning
-    - is_evening
     - is_morning
+    - is_afternoon
+    - is_evening
     - is_night
 
-  temporal_features3:
-    - is_10am
-    - is_10pm
-    - is_11am
-    - is_11pm
+  temporal_hourly:
     - is_12am
-    - is_12pm
     - is_1am
-    - is_1pm
     - is_2am
-    - is_2pm
     - is_3am
-    - is_3pm
     - is_4am
-    - is_4pm
     - is_5am
-    - is_5pm
     - is_6am
-    - is_6pm
     - is_7am
-    - is_7pm
     - is_8am
-    - is_8pm
     - is_9am
+    - is_10am
+    - is_11am
+    - is_12pm
+    - is_1pm
+    - is_2pm
+    - is_3pm
+    - is_4pm
+    - is_5pm
+    - is_6pm
+    - is_7pm
+    - is_8pm
     - is_9pm
+    - is_10pm
+    - is_11pm
 
-  gambling:
-    - bingo
-    - car race betting
-    - casino poker
-    - casino slot machines
-    - do not gamble at all
-    - horse track betting
-    - offline lottery
-    - offline sports betting
-    - online lottery
-    - online poker
-    - online sports betting
-    - other
+  # ============================================================================
+  # TASK SPEED FEATURES
+  # ============================================================================
+  task_speed:
+    - is_suspiciously_fast
+    - is_very_fast
+    - is_fast
+    - is_normal_speed
+    - is_slow
+    - is_suspiciously_slow
 
-  income_buckets:
-    - "Less than £35k"
-    - "£35k to £49k"
-    - "£50k to £79k"
-    - "£80k to £99k"
-    - "£100k or more"
-    - "Prefer not to answer"
-    - "unknown."
-
-  gender:
-    - gender_male
-    - gender_female
-    - gender_other
-    - prefer_not_to_say
-
-  risk:
-    - risk=100
-    - risk<90
-    - risk<80
-    - risk<50
-
+  # ============================================================================
+  # QUALITY & RISK FEATURES
+  # ============================================================================
   quality:
     - quality=100
     - quality<90
@@ -209,44 +102,110 @@ feature_sets:
     - quality<50
     - quality<30
 
-  quality_delta:
-    - quality_delta_LargePostive
-    - quality_delta_Postive
-    - quality_delta_Neutral
-    - quality_delta_LargeNegative
-    - quality_delta_Negative
+  risk:
+    - risk=100
+    - risk<90
+    - risk<80
+    - risk<50
 
-  risk_delta:
-    - risk_delta_LargePostive
-    - risk_delta_Postive
-    - risk_delta_Neutral
-    - risk_delta_LargeNegative
-    - risk_delta_Negative
+  # ============================================================================
+  # DEMOGRAPHIC FEATURES
+  # ============================================================================
+  gender:
+    - gender_female
+    - gender_male
+    - gender_other
+    - "gender_prefer not to say"
 
-  task_speed:
-    - is_suspiciously_fast
-    - is_fast
-    - is_normal_speed
-    - is_slow
-    - is_suspiciously_slow
+  income:
+    - "fulcrum_household_income_mapped_Less than £15,000"
+    - "fulcrum_household_income_mapped_£15,000 to £19,999"
+    - "fulcrum_household_income_mapped_£20,000 to £24,999"
+    - "fulcrum_household_income_mapped_£25,000 to £29,999"
+    - "fulcrum_household_income_mapped_£30,000 to £34,999"
+    - "fulcrum_household_income_mapped_£35,000 to £39,999"
+    - "fulcrum_household_income_mapped_£40,000 to £44,999"
+    - "fulcrum_household_income_mapped_£45,000 to £49,999"
+    - "fulcrum_household_income_mapped_£50,000 to £59,999"
+    - "fulcrum_household_income_mapped_£60,000 to £74,999"
+    - "fulcrum_household_income_mapped_£75,000 to £84,999"
+    - "fulcrum_household_income_mapped_£85,000 to £99,999"
+    - "fulcrum_household_income_mapped_£100,000 to £124,999"
+    - "fulcrum_household_income_mapped_£125,000 to £149,999"
+    - "fulcrum_household_income_mapped_£150,000 to £174,999"
+    - "fulcrum_household_income_mapped_£175,000 to £199,999"
+    - "fulcrum_household_income_mapped_£200,000 and above"
+    - "fulcrum_household_income_mapped_Prefer not to answer"
+    - fulcrum_household_income_mapped_nan
+
+  # ============================================================================
+  # GAMBLING FEATURES
+  # ============================================================================
+  gambling:
+    - gambling_participation_mc_bingo
+    - "gambling_participation_mc_car race betting"
+    - "gambling_participation_mc_casino poker"
+    - "gambling_participation_mc_casino slot machines"
+    - "gambling_participation_mc_do not gamble at all"
+    - "gambling_participation_mc_horse track betting"
+    - "gambling_participation_mc_offline lottery"
+    - "gambling_participation_mc_offline sports betting"
+    - "gambling_participation_mc_online lottery"
+    - "gambling_participation_mc_online poker"
+    - "gambling_participation_mc_online sports betting"
+    - gambling_participation_mc_other
+
+  # ============================================================================
+  # PLATFORM & DEVICE FEATURES
+  # ============================================================================
+  platform:
+    - platform_name_Android
+    - platform_name_iOS
+    - platform_name_Linux
+    - "platform_name_Mac OS X"
+    - platform_name_Windows
+    - platform_name_Unknown
+
+  device:
+    - device_Android
+    - device_iOS
+    - device_Windows
+    - device_Linux
+    - device_ChromeOS
+    - device_Tizen
+    - device_Unknown
 
   hardware:
-    - Desktop
-    - Android
-    - Macintosh
-    - P8 Standard
-    - RocStar
-    - iPhone
-    - iPod Touch
+    - hardware_version_iPhone
+    - "hardware_version_iPod Touch"
+    - hardware_version_Desktop
+    - hardware_version_Macintosh
+    - hardware_version_Baoxue
+    - hardware_version_Fablet
+    - hardware_version_G2
+    - "hardware_version_Galaxy Note 4"
+    - "hardware_version_Generic Android"
+    - "hardware_version_IDOL 3 6045Y"
+    - hardware_version_L9
+    - "hardware_version_P8 Standard"
+    - hardware_version_RocStar
+    - hardware_version_ShotX
+    - "hardware_version_Xperia E3 Dual"
 
-  exposure_bands:
-    - exposure_control
-    - exposure_exposed
+  # ============================================================================
+  # EXPERIMENT & ENTRY FEATURES
+  # ============================================================================
+  exposure:
+    - exposure_band_control
+    - exposure_band_exposed
 
   entry_point:
     - entryPoint_offerwall
     - entryPoint_notification
 
+  # ============================================================================
+  # USER SETTINGS FEATURES
+  # ============================================================================
   email_verification:
     - email_verified_False
     - email_verified_True
@@ -255,13 +214,6 @@ feature_sets:
     - share_location_data_False
     - share_location_data_True
 
-  platform:
-    - Android
-    - Linux
-    - Mac OS X
-    - Unknown
-    - iOS
-
   notify_new_task:
     - notify_new_task_False
     - notify_new_task_True
@@ -269,10 +221,122 @@ feature_sets:
   notify_task_payout:
     - notify_task_payout_False
     - notify_task_payout_True
-  
-  ip_addr_count:
-    - "ip_addr_count_1"
-    - "ip_addr_count_2"
-    - "ip_addr_count_3"
-    - "ip_addr_count_4"
-    - "ip_addr_count_5"
+
+  # ============================================================================
+  # IP ADDRESS FEATURES
+  # ============================================================================
+  ip_address_count:
+    - ip_address_count_1
+    - ip_address_count_2
+    - ip_address_count_3
+    - ip_address_count_4
+    - ip_address_count_5
+
+  # ============================================================================
+  # EMPLOYER FEATURES (if encoded)
+  # ============================================================================
+  employer_industry:
+    - employer_industry_A
+    - employer_industry_B
+    - employer_industry_C
+    - employer_industry_D
+    - employer_industry_E
+    - employer_industry_F
+    - employer_industry_G
+    - employer_industry_H
+    - employer_industry_I
+    - employer_industry_J
+    - employer_industry_K
+    - employer_industry_L
+    - employer_industry_M
+    - employer_industry_N
+    - employer_industry_O
+    - employer_industry_P
+    - employer_industry_Q
+    - employer_industry_R
+    - employer_industry_S
+    - employer_industry_T
+    - employer_industry_U
+    - employer_industry_V
+    - employer_industry_W
+    - employer_industry_X
+    - employer_industry_Y
+    - employer_industry_Z
+
+  employer_department:
+    - employer_department_A
+    - employer_department_B
+    - employer_department_C
+    - employer_department_D
+    - employer_department_E
+    - employer_department_F
+    - employer_department_G
+    - employer_department_H
+    - employer_department_I
+    - employer_department_J
+    - employer_department_K
+    - employer_department_L
+    - employer_department_M
+    - employer_department_N
+    - employer_department_O
+
+  region:
+    - region_B
+    - region_C
+    - region_D
+    - region_E
+    - region_F
+    - region_G
+    - region_H
+    - region_I
+    - region_J
+    - region_K
+    - region_L
+
+# ============================================================================
+# TEST CONFIGURATION
+# ============================================================================
+test_settings:
+  significance_level: 0.05
+  bonferroni_correction: true
+  outcome_var: "wonky_study_count"
+  user_id_var: "respondentPk"
+  min_sample_size: 30
+
+# ============================================================================
+# FEATURE SET GROUPS (for batch testing)
+# ============================================================================
+feature_groups:
+  behavioral:
+    - tasks_completed
+    - days_active_buckets
+    - task_speed
+    - entry_point
+
+  temporal:
+    - temporal_day_of_week
+    - temporal_business_hours
+    - temporal_time_of_day
+
+  demographic:
+    - gender
+    - income
+    - region
+
+  platform:
+    - platform
+    - device
+    - hardware
+
+  user_settings:
+    - email_verification
+    - share_location_data
+    - notify_new_task
+    - notify_task_payout
+
+  quality_risk:
+    - quality
+    - risk
+
+  experimental:
+    - exposure
