@@ -35,6 +35,7 @@ def create_breakdown_summary(
     non_wonky_condition = f"{group_col} is NaN" if has_nan else f"{group_col} = 0"
 
     for feature in features:
+        print(f'working on {feature}')
         if feature not in df.columns:
             continue
 

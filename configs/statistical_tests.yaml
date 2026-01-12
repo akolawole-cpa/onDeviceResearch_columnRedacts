@@ -1,9 +1,7 @@
 # Statistical Tests Configuration
 
 feature_sets:
-  # ============================================================================
-  # TASK COMPLETION FEATURES
-  # ============================================================================
+
   tasks_completed:
     - total_tasks_1_10
     - total_tasks_11_25
@@ -13,26 +11,36 @@ feature_sets:
     - total_tasks_176_225
     - total_tasks_226_plus
 
-  # ============================================================================
-  # DAYS ACTIVE FEATURES (binned)
-  # ============================================================================
-  days_active_buckets:
-    - days_active_<2
-    - days_active_<10
-    - days_active_<20
-    - days_active_<30
-    - days_active_<50
-    - days_active_<75
-    - days_active_<100
-    - days_active_<125
-    - days_active_<150
-    - days_active_<200
-    - days_active_<250
-    - days_active_>=250
+  # Cumulative bins (overlapping)
+  # days_active_cumulative:
+    # - days_active_<2
+    # - days_active_<10
+    # - days_active_<20
+    # - days_active_<30
+    # - days_active_<50
+    # - days_active_<75
+    # - days_active_<100
+    # - days_active_<125
+    # - days_active_<150
+    # - days_active_<200
+    # - days_active_<250
+    # - days_active_>=250
 
-  # ============================================================================
-  # TEMPORAL FEATURES
-  # ============================================================================
+# Mutually exclusive bins
+  days_active_exclusive:
+    - days_active_0_to_2
+    - days_active_3_to_10
+    - days_active_11_to_20
+    - days_active_21_to_30
+    - days_active_31_to_50
+    - days_active_51_to_75
+    - days_active_76_to_100
+    - days_active_101_to_125
+    - days_active_126_to_150
+    - days_active_151_to_200
+    - days_active_201_to_250
+    - days_active_251_plus
+
   temporal_day_of_week:
     - is_weekend
     - is_monday
@@ -81,9 +89,6 @@ feature_sets:
     - is_10pm
     - is_11pm
 
-  # ============================================================================
-  # TASK SPEED FEATURES
-  # ============================================================================
   task_speed:
     - is_suspiciously_fast
     - is_very_fast
@@ -92,30 +97,24 @@ feature_sets:
     - is_slow
     - is_suspiciously_slow
 
-  # ============================================================================
-  # QUALITY & RISK FEATURES
-  # ============================================================================
-  quality:
-    - quality=100
-    - quality<90
-    - quality<75
-    - quality<50
-    - quality<30
+  # quality:
+  #   - quality=100
+  #   - quality<90
+  #   - quality<75
+  #   - quality<50
+  #   - quality<30
 
-  risk:
-    - risk=100
-    - risk<90
-    - risk<80
-    - risk<50
+  # risk:
+  #   - risk=100
+  #   - risk<90
+  #   - risk<80
+  #   - risk<50
 
-  # ============================================================================
-  # DEMOGRAPHIC FEATURES
-  # ============================================================================
   gender:
     - gender_female
     - gender_male
     - gender_other
-    - "gender_prefer not to say"
+    - gender_prefer not to say
 
   income:
     - "fulcrum_household_income_mapped_Less than £15,000"
@@ -138,9 +137,6 @@ feature_sets:
     - "fulcrum_household_income_mapped_Prefer not to answer"
     - fulcrum_household_income_mapped_nan
 
-  # ============================================================================
-  # GAMBLING FEATURES
-  # ============================================================================
   gambling:
     - gambling_participation_mc_bingo
     - "gambling_participation_mc_car race betting"
@@ -155,18 +151,15 @@ feature_sets:
     - "gambling_participation_mc_online sports betting"
     - gambling_participation_mc_other
 
-  # ============================================================================
-  # PLATFORM & DEVICE FEATURES
-  # ============================================================================
-  platform:
+  platform: # to replace
     - platform_name_Android
     - platform_name_iOS
     - platform_name_Linux
-    - "platform_name_Mac OS X"
+    - platform_name_Mac OS X
     - platform_name_Windows
     - platform_name_Unknown
 
-  device:
+  device: # to replace
     - device_Android
     - device_iOS
     - device_Windows
@@ -175,9 +168,9 @@ feature_sets:
     - device_Tizen
     - device_Unknown
 
-  hardware:
+  hardware: # to replace
     - hardware_version_iPhone
-    - "hardware_version_iPod Touch"
+    - hardware_version_iPod Touch
     - hardware_version_Desktop
     - hardware_version_Macintosh
     - hardware_version_Baoxue
@@ -192,9 +185,6 @@ feature_sets:
     - hardware_version_ShotX
     - "hardware_version_Xperia E3 Dual"
 
-  # ============================================================================
-  # EXPERIMENT & ENTRY FEATURES
-  # ============================================================================
   exposure:
     - exposure_band_control
     - exposure_band_exposed
@@ -203,9 +193,6 @@ feature_sets:
     - entryPoint_offerwall
     - entryPoint_notification
 
-  # ============================================================================
-  # USER SETTINGS FEATURES
-  # ============================================================================
   email_verification:
     - email_verified_False
     - email_verified_True
@@ -222,9 +209,6 @@ feature_sets:
     - notify_task_payout_False
     - notify_task_payout_True
 
-  # ============================================================================
-  # IP ADDRESS FEATURES
-  # ============================================================================
   ip_address_count:
     - ip_address_count_1
     - ip_address_count_2
@@ -232,70 +216,93 @@ feature_sets:
     - ip_address_count_4
     - ip_address_count_5
 
-  # ============================================================================
-  # EMPLOYER FEATURES (if encoded)
-  # ============================================================================
-  employer_industry:
-    - employer_industry_A
-    - employer_industry_B
-    - employer_industry_C
-    - employer_industry_D
-    - employer_industry_E
-    - employer_industry_F
-    - employer_industry_G
-    - employer_industry_H
-    - employer_industry_I
-    - employer_industry_J
-    - employer_industry_K
-    - employer_industry_L
-    - employer_industry_M
-    - employer_industry_N
-    - employer_industry_O
-    - employer_industry_P
-    - employer_industry_Q
-    - employer_industry_R
-    - employer_industry_S
-    - employer_industry_T
-    - employer_industry_U
-    - employer_industry_V
-    - employer_industry_W
-    - employer_industry_X
-    - employer_industry_Y
-    - employer_industry_Z
+employer_industry:
+    - employer_industry_mapped_Accounting
+    - employer_industry_mapped_Advertising
+    - employer_industry_mapped_Agriculture/Fishing
+    - employer_industry_mapped_Architecture
+    - employer_industry_mapped_Automotive
+    - employer_industry_mapped_Aviation
+    - employer_industry_mapped_Banking/Financial
+    - employer_industry_mapped_Bio-Tech
+    - employer_industry_mapped_Brokerage
+    - employer_industry_mapped_Carpenting/Electrical installations/VVS
+    - employer_industry_mapped_Chemicals/Plastics/Rubber
+    - employer_industry_mapped_Communications/Information
+    - employer_industry_mapped_Computer Hardware
+    - employer_industry_mapped_Computer Reseller (software/hardware)
+    - employer_industry_mapped_Computer Software
+    - employer_industry_mapped_Construction
+    - employer_industry_mapped_Consulting
+    - employer_industry_mapped_Consumer Electronics
+    - employer_industry_mapped_Consumer Packaged Goods
+    - employer_industry_mapped_Education
+    - employer_industry_mapped_Energy/Utilities/Oil and Gas
+    - employer_industry_mapped_Engineering
+    - employer_industry_mapped_Environmental Services
+    - employer_industry_mapped_Fashion/Apparel
+    - employer_industry_mapped_Food/Beverage
+    - employer_industry_mapped_Government/Public Sector
+    - employer_industry_mapped_Healthcare
+    - employer_industry_mapped_Hospitality/Tourism
+    - employer_industry_mapped_Human Resources
+    - employer_industry_mapped_I don't work
+    - employer_industry_mapped_Information Technology/IT
+    - employer_industry_mapped_Insurance
+    - employer_industry_mapped_Internet
+    - employer_industry_mapped_Legal/Law
+    - employer_industry_mapped_Manufacturing
+    - employer_industry_mapped_Market Research
+    - employer_industry_mapped_Marketing/Sales
+    - employer_industry_mapped_Media/Entertainment
+    - employer_industry_mapped_Military
+    - employer_industry_mapped_Non Profit/Social services
+    - employer_industry_mapped_Other
+    - employer_industry_mapped_Personal Services
+    - employer_industry_mapped_Pharmaceuticals
+    - employer_industry_mapped_Printing Publishing
+    - employer_industry_mapped_Public Relations
+    - employer_industry_mapped_Real Estate/Property
+    - employer_industry_mapped_Retail/Wholesale trade
+    - employer_industry_mapped_Security
+    - employer_industry_mapped_Shipping/Distribution
+    - employer_industry_mapped_Telecommunications
+    - employer_industry_mapped_Transportation
+    - employer_industry_mapped_nan
 
-  employer_department:
-    - employer_department_A
-    - employer_department_B
-    - employer_department_C
-    - employer_department_D
-    - employer_department_E
-    - employer_department_F
-    - employer_department_G
-    - employer_department_H
-    - employer_department_I
-    - employer_department_J
-    - employer_department_K
-    - employer_department_L
-    - employer_department_M
-    - employer_department_N
-    - employer_department_O
+employer_department:
+    - employer_department_mapped_Administration/General Staff
+    - employer_department_mapped_Customer Service/Client Service
+    - employer_department_mapped_Executive Leadership
+    - employer_department_mapped_Finance/Accounting
+    - employer_department_mapped_Human Resources
+    - employer_department_mapped_I don't work
+    - employer_department_mapped_Legal/Law
+    - employer_department_mapped_Marketing
+    - employer_department_mapped_Operations
+    - employer_department_mapped_Other
+    - employer_department_mapped_Procurement
+    - employer_department_mapped_Sales/Business Development
+    - employer_department_mapped_Technology Development Hardware (not only IT)
+    - employer_department_mapped_Technology Development Software (not only IT)
+    - employer_department_mapped_Technology Implementation
+    - employer_department_mapped_nan
 
-  region:
-    - region_B
-    - region_C
-    - region_D
-    - region_E
-    - region_F
-    - region_G
-    - region_H
-    - region_I
-    - region_J
-    - region_K
-    - region_L
+ region:
+    - fulcrum_region_mapped_East Midlands (England)
+    - fulcrum_region_mapped_East Of England
+    - fulcrum_region_mapped_London
+    - fulcrum_region_mapped_North East (England)
+    - fulcrum_region_mapped_North West (England)
+    - fulcrum_region_mapped_Northern Ireland
+    - fulcrum_region_mapped_Scotland
+    - fulcrum_region_mapped_South East (England)
+    - fulcrum_region_mapped_South West (England)
+    - fulcrum_region_mapped_Wales
+    - fulcrum_region_mapped_West Midlands (England)
+    - fulcrum_region_mapped_Yorkshire And The Humber
+    - fulcrum_region_mapped_nan
 
-# ============================================================================
-# TEST CONFIGURATION
-# ============================================================================
 test_settings:
   significance_level: 0.05
   bonferroni_correction: true
@@ -303,13 +310,11 @@ test_settings:
   user_id_var: "respondentPk"
   min_sample_size: 30
 
-# ============================================================================
-# FEATURE SET GROUPS (for batch testing)
-# ============================================================================
 feature_groups:
   behavioral:
     - tasks_completed
-    - days_active_buckets
+    - days_active_cumulative
+    - days_active_exclusive
     - task_speed
     - entry_point
 
@@ -322,6 +327,8 @@ feature_groups:
     - gender
     - income
     - region
+    - employer_industry
+    - employer_department
 
   platform:
     - platform

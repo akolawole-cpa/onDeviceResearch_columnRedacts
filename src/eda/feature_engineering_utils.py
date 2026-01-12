@@ -174,9 +174,11 @@ def create_binned_features(
     bins: List[int],
     prefix: Optional[str] = None,
     include_ge_last: bool = True,
+    include_mutually_exclusive: bool = False,
 ) -> Tuple[pd.DataFrame, pd.Index]:
     """
     Create binned features with cumulative "<X" columns and a ">=X" column.
+    Optionally also creates mutually exclusive "between" bins.
     
     Replaces this repeated pattern:
         bins = [2, 7, 14, 21, 28, 31, 50]
@@ -192,28 +194,79 @@ def create_binned_features(
         bins: List of bin thresholds (e.g., [2, 7, 14, 21, 28, 31, 50])
         prefix: Prefix for new columns (defaults to column name + '_')
         include_ge_last: If True, include a '>= last_bin' column
+        include_mutually_exclusive: If True, also create non-overlapping bins
+            (e.g., '0_to_2', '3_to_10', '11_to_20', etc.)
     
     Returns:
         Tuple of (DataFrame with binned columns, Index of new column names)
     
     Example:
+        # Cumulative bins only (default)
         df, cols = create_binned_features(
             df, 'days_active_before_task', 
-            bins=[2, 7, 14, 21, 28, 31, 50],
+            bins=[2, 10, 20, 30, 50],
             prefix='days_active_'
         )
+        # Creates: days_active_<2, days_active_<10, ..., days_active_>=50
+        
+        # With mutually exclusive bins
+        df, cols = create_binned_features(
+            df, 'days_active_before_task', 
+            bins=[2, 10, 20, 30, 50],
+            prefix='days_active_',
+            include_mutually_exclusive=True
+        )
+        # Also creates: days_active_0_to_2, days_active_3_to_10, ..., days_active_51_plus
     """
     if prefix is None:
         prefix = f"{column}_"
     
     new_features = {}
     
+    # =========================================================================
+    # CUMULATIVE BINS (less than thresholds) - Original behavior
+    # =========================================================================
     for limit in bins:
         new_features[f'{prefix}<{limit}'] = np.where(df[column] < limit, 1, 0)
     
     if include_ge_last and bins:
         last_bin = bins[-1]
         new_features[f'{prefix}>={last_bin}'] = np.where(df[column] >= last_bin, 1, 0)
+    
+    # =========================================================================
+    # MUTUALLY EXCLUSIVE BINS (between thresholds) - New feature
+    # =========================================================================
+    if include_mutually_exclusive:
+        # Build boundaries: [0] + bins
+        boundaries = [0] + bins
+        
+        for i in range(len(boundaries)):
+            lower = boundaries[i]
+            
+            if i < len(boundaries) - 1:
+                upper = boundaries[i + 1]
+                
+                if i == 0:
+                    # First bin: 0 to first_threshold (inclusive)
+                    # e.g., 0_to_2 means values 0, 1, 2
+                    col_name = f"{prefix}{lower}_to_{upper}"
+                    new_features[col_name] = np.where(
+                        (df[column] >= lower) & (df[column] <= upper), 1, 0
+                    )
+                else:
+                    # Subsequent bins: prev_threshold+1 to current_threshold
+                    # e.g., 3_to_10 means values 3, 4, 5, ..., 10
+                    actual_lower = lower + 1
+                    col_name = f"{prefix}{actual_lower}_to_{upper}"
+                    new_features[col_name] = np.where(
+                        (df[column] >= actual_lower) & (df[column] <= upper), 1, 0
+                    )
+            else:
+                # Last bin: threshold+1 and above
+                # e.g., 51_plus means values >= 51
+                actual_lower = lower + 1
+                col_name = f"{prefix}{actual_lower}_plus"
+                new_features[col_name] = np.where(df[column] >= actual_lower, 1, 0)
     
     new_df = pd.concat([df, pd.DataFrame(new_features, index=df.index)], axis=1)
     new_cols = pd.Index(new_features.keys())
@@ -364,6 +417,7 @@ def filter_to_engineered_features(
     df, 
     original_columns: set,
     id_column: str = 'respondentPk',
+    kpi_column: str = 'wonky_study_count',
     additional_columns: list = None
 ):
     """
@@ -388,12 +442,13 @@ def filter_to_engineered_features(
         user_info_df_final = filter_to_engineered_features(
             user_info_df, 
             original_columns,
-            id_column='respondentPk'
+            id_column='respondentPk',
+            kpi_column: str = 'wonky_study_count'
         )
     """
     engineered_cols = [col for col in df.columns if col not in original_columns]
     
-    final_cols = [id_column] + engineered_cols
+    final_cols = [id_column] + [kpi_column] + engineered_cols
     
     if additional_columns:
         for col in additional_columns:

@@ -548,3 +548,246 @@ def OLS_with_cluster_robust_test(
         })
 
     return pd.DataFrame(results).set_index('feature').sort_values('t_statistic', key=abs, ascending=False)
+
+
+def logistic_regression_with_cluster_robust_test(
+    df: pd.DataFrame,
+    feature_set: List[str],
+    outcome_var: str = "wonky_study_count",
+    user_id_var: str = "respondentPk",
+    significance_level: float = 0.05,
+    binarize_outcome: bool = True,
+) -> pd.DataFrame:
+    """
+    Logistic regression analysis with cluster-robust standard errors.
+    
+    For binary outcomes, logistic regression is more appropriate than OLS as it:
+    - Models probability directly (bounded 0-1)
+    - Provides odds ratios for interpretability
+    - Handles non-linear relationships between features and probability
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with features, outcome, and user identifier
+    feature_set : List[str]
+        List of feature column names to test
+    outcome_var : str
+        Outcome variable name (will be binarized if binarize_outcome=True)
+    user_id_var : str
+        User identifier for clustering
+    significance_level : float
+        Significance level for determining significance
+    binarize_outcome : bool
+        If True, convert outcome to binary (>0 = 1, else 0)
+    
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with coefficients, odds ratios, z_statistic, p_value,
+        and significance for each feature
+        
+    Notes:
+    ------
+    - Odds Ratio > 1: feature increases probability of outcome
+    - Odds Ratio < 1: feature decreases probability of outcome
+    - Odds Ratio = 1: no effect
+    
+    Example interpretation:
+        OR = 1.5 means the odds of outcome are 50% higher when feature=1
+        OR = 0.7 means the odds of outcome are 30% lower when feature=1
+    """
+    from statsmodels.discrete.discrete_model import Logit
+    
+    # Effect size thresholds for odds ratio
+    # Based on Chen et al. (2010) guidelines for OR
+    or_thresholds = {"small": 1.5, "medium": 2.5, "large": 4.0}
+    
+    results = []
+    
+    for feature in feature_set:
+        if feature not in df.columns:
+            continue
+        
+        df_test = df[[user_id_var, outcome_var, feature]].copy()
+        df_test = df_test.dropna()
+        
+        # Skip if insufficient data
+        if len(df_test) < 30:
+            continue
+        
+        # Binarize outcome if requested
+        if binarize_outcome:
+            df_test['outcome_binary'] = (df_test[outcome_var] > 0).astype(int)
+            y = df_test['outcome_binary']
+        else:
+            y = df_test[outcome_var]
+        
+        # Check outcome has variation
+        if y.nunique() < 2:
+            continue
+        
+        # Check feature has variation
+        if df_test[feature].nunique() < 2:
+            continue
+        
+        X = sm.add_constant(df_test[[feature]])
+        
+        try:
+            model = Logit(y, X)
+            
+            # Fit with cluster-robust standard errors
+            result_robust = model.fit(
+                cov_type='cluster',
+                cov_kwds={'groups': df_test[user_id_var]},
+                disp=False,  # Suppress convergence output
+                maxiter=100,
+            )
+            
+            coef = result_robust.params[feature]
+            se = result_robust.bse[feature]
+            z_stat = result_robust.tvalues[feature]
+            p_value = result_robust.pvalues[feature]
+            conf_int = result_robust.conf_int().loc[feature]
+            
+            # Calculate odds ratio and its CI
+            odds_ratio = np.exp(coef)
+            or_ci_lower = np.exp(conf_int[0])
+            or_ci_upper = np.exp(conf_int[1])
+            
+            # Calculate proportions for each group
+            prop_with = df_test[df_test[feature] == 1]['outcome_binary' if binarize_outcome else outcome_var].mean()
+            prop_without = df_test[df_test[feature] == 0]['outcome_binary' if binarize_outcome else outcome_var].mean()
+            
+            # Interpret effect size based on odds ratio
+            # Use distance from 1 (either direction)
+            or_effect = max(odds_ratio, 1/odds_ratio) if odds_ratio > 0 else np.nan
+            effect_interp = _interpret_effect_size_or(or_effect, or_thresholds)
+            
+            # Pseudo R-squared (McFadden's)
+            pseudo_r2 = result_robust.prsquared
+            
+            results.append({
+                'feature': feature,
+                'log_odds_coef': coef,
+                'odds_ratio': odds_ratio,
+                'or_ci_lower': or_ci_lower,
+                'or_ci_upper': or_ci_upper,
+                'z_statistic': z_stat,
+                'p_value': p_value,
+                'se_cluster_robust': se,
+                'significant': p_value < significance_level,
+                'prop_outcome_with_feature': prop_with,
+                'prop_outcome_without_feature': prop_without,
+                'prop_difference': prop_with - prop_without,
+                'pseudo_r2': pseudo_r2,
+                'effect_size_interpretation': effect_interp,
+                'n_obs': len(df_test),
+            })
+            
+        except Exception as e:
+            # Common issues: perfect separation, convergence
+            continue
+    
+    results_df = pd.DataFrame(results)
+    
+    if len(results_df) > 0:
+        results_df = results_df.set_index('feature')
+        results_df = results_df.sort_values('z_statistic', key=abs, ascending=False)
+    
+    return results_df
+
+
+def _interpret_effect_size_or(value: float, thresholds: Dict[str, float]) -> str:
+    """
+    Interpret effect size for odds ratios.
+    
+    For OR, effect size is the distance from 1 (either direction).
+    """
+    if pd.isna(value) or value <= 0:
+        return "undefined"
+    
+    if value < thresholds["small"]:
+        return "negligible"
+    elif value < thresholds["medium"]:
+        return "small"
+    elif value < thresholds["large"]:
+        return "medium"
+    else:
+        return "large"
+
+
+def run_combined_regression_tests(
+    df: pd.DataFrame,
+    feature_set: List[str],
+    outcome_var: str = "wonky_study_count",
+    user_id_var: str = "respondentPk",
+    significance_level: float = 0.05,
+) -> pd.DataFrame:
+    """
+    Run both OLS and Logistic regression and combine results.
+    
+    This gives you a comprehensive view:
+    - OLS: Linear effect (mean difference)
+    - Logistic: Odds ratio (probability effect)
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with features, outcome, and user identifier
+    feature_set : List[str]
+        List of feature column names to test
+    outcome_var : str
+        Outcome variable name
+    user_id_var : str
+        User identifier for clustering
+    significance_level : float
+        Significance level
+    
+    Returns:
+    --------
+    pd.DataFrame
+        Combined results with OLS and Logistic metrics side by side
+    """
+    # Run OLS
+    ols_results = OLS_with_cluster_robust_test(
+        df, feature_set, outcome_var, user_id_var, significance_level
+    )
+    
+    # Run Logistic
+    logit_results = logistic_regression_with_cluster_robust_test(
+        df, feature_set, outcome_var, user_id_var, significance_level
+    )
+    
+    if len(ols_results) == 0 and len(logit_results) == 0:
+        return pd.DataFrame()
+    
+    # Rename columns for clarity
+    if len(ols_results) > 0:
+        ols_results = ols_results.add_prefix('ols_')
+    
+    if len(logit_results) > 0:
+        logit_results = logit_results.add_prefix('logit_')
+    
+    # Merge on feature index
+    if len(ols_results) > 0 and len(logit_results) > 0:
+        combined = ols_results.join(logit_results, how='outer')
+    elif len(ols_results) > 0:
+        combined = ols_results
+    else:
+        combined = logit_results
+    
+    # Add a summary column: significant in both?
+    if 'ols_significant' in combined.columns and 'logit_significant' in combined.columns:
+        combined['significant_both'] = (
+            combined['ols_significant'] & combined['logit_significant']
+        )
+        combined['significant_either'] = (
+            combined['ols_significant'] | combined['logit_significant']
+        )
+    
+    # Sort by OLS t-statistic if available
+    if 'ols_t_statistic' in combined.columns:
+        combined = combined.sort_values('ols_t_statistic', key=abs, ascending=False)
+    
+    return combined
