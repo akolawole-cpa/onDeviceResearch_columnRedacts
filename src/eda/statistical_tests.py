@@ -413,7 +413,8 @@ def format_ols_for_stakeholders(
     Parameters
     ----------
     ols_results : pd.DataFrame
-        Output from OLS_with_cluster_robust_test()
+        Output from OLS_with_cluster_robust_test() or run_combined_regression_tests()
+        Handles both prefixed (ols_*) and non-prefixed column names
     baseline_mean : float
         Mean of outcome variable (for percentage calculations)
     confidence_level : float
@@ -425,11 +426,11 @@ def format_ols_for_stakeholders(
     -------
     pd.DataFrame with columns:
         - feature: Feature name
-        - coefficient: Raw coefficient value
+        - ols_mean_difference: Raw coefficient value
         - ci_lower, ci_upper: Confidence interval bounds
-        - ci_formatted: "coef [lower, upper]" string
+        - ci_95: "coef [lower, upper]" string
         - pct_change: Coefficient as % of baseline
-        - p_value: Raw p-value
+        - ols_p_value: Raw p-value
         - significance: Stars (*** / ** / *)
         - interpretation: Plain English description
         - impact_category: HIGH/MEDIUM/LOW/NOT SIGNIFICANT
@@ -438,25 +439,56 @@ def format_ols_for_stakeholders(
 
     results = ols_results.reset_index() if 'feature' not in ols_results.columns else ols_results.copy()
 
+    # Handle both prefixed (from run_combined_regression_tests) and non-prefixed column names
+    # Map to standardized names for processing
+    col_map = {}
+    if 'ols_mean_difference' in results.columns:
+        col_map['mean_diff'] = 'ols_mean_difference'
+        col_map['se'] = 'ols_se_cluster_robust'
+        col_map['p_value'] = 'ols_p_value'
+        col_map['cohens_d'] = 'ols_cohens_d'
+    elif 'mean_difference' in results.columns:
+        col_map['mean_diff'] = 'mean_difference'
+        col_map['se'] = 'se_cluster_robust'
+        col_map['p_value'] = 'p_value'
+        col_map['cohens_d'] = 'cohens_d'
+    else:
+        raise KeyError(
+            f"Expected 'mean_difference' or 'ols_mean_difference' column. "
+            f"Available columns: {list(results.columns)}"
+        )
+
+    mean_diff_col = col_map['mean_diff']
+    se_col = col_map['se']
+    p_value_col = col_map['p_value']
+    cohens_d_col = col_map['cohens_d']
+
     # Calculate confidence intervals
     z_crit = stats.norm.ppf((1 + confidence_level) / 2)
-    results['ci_lower'] = results['mean_difference'] - z_crit * results['se_cluster_robust']
-    results['ci_upper'] = results['mean_difference'] + z_crit * results['se_cluster_robust']
+    if se_col in results.columns:
+        results['ci_lower'] = results[mean_diff_col] - z_crit * results[se_col]
+        results['ci_upper'] = results[mean_diff_col] + z_crit * results[se_col]
+    else:
+        results['ci_lower'] = np.nan
+        results['ci_upper'] = np.nan
 
     # Formatted CI string
-    results['ci_formatted'] = results.apply(
-        lambda r: f"{r['mean_difference']:+.3f} [{r['ci_lower']:+.3f}, {r['ci_upper']:+.3f}]",
+    results['ci_95'] = results.apply(
+        lambda r: f"{r[mean_diff_col]:+.3f} [{r['ci_lower']:+.3f}, {r['ci_upper']:+.3f}]"
+        if pd.notna(r['ci_lower']) else f"{r[mean_diff_col]:+.3f}",
         axis=1
     )
 
     # Percentage change from baseline
     if baseline_mean != 0:
-        results['pct_change'] = (results['mean_difference'] / baseline_mean * 100).round(1)
+        results['pct_change'] = (results[mean_diff_col] / baseline_mean * 100).round(1)
     else:
         results['pct_change'] = np.nan
 
     # Significance stars
     def get_stars(p):
+        if pd.isna(p):
+            return ''
         if p < 0.001:
             return '***'
         elif p < 0.01:
@@ -465,14 +497,15 @@ def format_ols_for_stakeholders(
             return '*'
         return ''
 
-    results['significance'] = results['p_value'].apply(get_stars)
+    results['significance'] = results[p_value_col].apply(get_stars)
 
     # Plain English interpretation
     def interpret_coefficient(row):
-        if row['p_value'] >= significance_level:
+        p_val = row[p_value_col]
+        if pd.isna(p_val) or p_val >= significance_level:
             return "No significant effect"
 
-        coef = row['mean_difference']
+        coef = row[mean_diff_col]
         pct = row['pct_change'] if pd.notna(row['pct_change']) else 0
 
         if coef > 0:
@@ -484,9 +517,12 @@ def format_ols_for_stakeholders(
 
     # Impact category based on Cohen's d
     def categorize_impact(row):
-        if row['p_value'] >= significance_level:
+        p_val = row[p_value_col]
+        if pd.isna(p_val) or p_val >= significance_level:
             return "NOT SIGNIFICANT"
-        d = abs(row.get('cohens_d', 0))
+        d = abs(row.get(cohens_d_col, 0)) if cohens_d_col in row else 0
+        if pd.isna(d):
+            d = 0
         if d >= 0.8:
             return "HIGH"
         elif d >= 0.5:
@@ -497,14 +533,14 @@ def format_ols_for_stakeholders(
 
     results['impact_category'] = results.apply(categorize_impact, axis=1)
 
-    # Select and reorder columns
+    # Select and reorder columns - include the original column names
     output_cols = [
-        'feature', 'mean_difference', 'ci_lower', 'ci_upper', 'ci_formatted',
-        'pct_change', 'p_value', 'significance', 'interpretation', 'impact_category'
+        'feature', mean_diff_col, 'ci_lower', 'ci_upper', 'ci_95',
+        'pct_change', p_value_col, 'significance', 'interpretation', 'impact_category'
     ]
     available_cols = [c for c in output_cols if c in results.columns]
 
-    return results[available_cols].sort_values('mean_difference', key=abs, ascending=False)
+    return results[available_cols].sort_values(mean_diff_col, key=abs, ascending=False)
 
 
 def format_odds_ratios_for_stakeholders(
@@ -517,7 +553,8 @@ def format_odds_ratios_for_stakeholders(
     Parameters
     ----------
     logit_results : pd.DataFrame
-        Output from logistic_regression_with_cluster_robust_test()
+        Output from logistic_regression_with_cluster_robust_test() or run_combined_regression_tests()
+        Handles both prefixed (logit_*) and non-prefixed column names
     significance_level : float
         Threshold for significance
 
@@ -525,27 +562,53 @@ def format_odds_ratios_for_stakeholders(
     -------
     pd.DataFrame with columns:
         - feature: Feature name
-        - odds_ratio: Raw OR value
+        - logit_odds_ratio: Raw OR value
         - or_formatted: "OR [CI lower, CI upper]" string
         - interpretation: Plain English (e.g., "50% more likely")
-        - p_value: Raw p-value
+        - logit_p_value: Raw p-value
         - significance: Stars
         - impact_category: HIGH/MEDIUM/LOW/NOT SIGNIFICANT
         - direction: "Risk Factor" / "Protective Factor" / "Neutral"
     """
     results = logit_results.reset_index() if 'feature' not in logit_results.columns else logit_results.copy()
 
+    # Handle both prefixed (from run_combined_regression_tests) and non-prefixed column names
+    col_map = {}
+    if 'logit_odds_ratio' in results.columns:
+        col_map['or'] = 'logit_odds_ratio'
+        col_map['p_value'] = 'logit_p_value'
+        col_map['or_ci_lower'] = 'logit_or_ci_lower'
+        col_map['or_ci_upper'] = 'logit_or_ci_upper'
+    elif 'odds_ratio' in results.columns:
+        col_map['or'] = 'odds_ratio'
+        col_map['p_value'] = 'p_value'
+        col_map['or_ci_lower'] = 'or_ci_lower'
+        col_map['or_ci_upper'] = 'or_ci_upper'
+    else:
+        raise KeyError(
+            f"Expected 'odds_ratio' or 'logit_odds_ratio' column. "
+            f"Available columns: {list(results.columns)}"
+        )
+
+    or_col = col_map['or']
+    p_value_col = col_map['p_value']
+    ci_lower_col = col_map['or_ci_lower']
+    ci_upper_col = col_map['or_ci_upper']
+
     # Formatted OR with CI
-    if 'or_ci_lower' in results.columns and 'or_ci_upper' in results.columns:
+    if ci_lower_col in results.columns and ci_upper_col in results.columns:
         results['or_formatted'] = results.apply(
-            lambda r: f"{r['odds_ratio']:.2f} [{r['or_ci_lower']:.2f}, {r['or_ci_upper']:.2f}]",
+            lambda r: f"{r[or_col]:.2f} [{r[ci_lower_col]:.2f}, {r[ci_upper_col]:.2f}]"
+            if pd.notna(r.get(ci_lower_col)) else f"{r[or_col]:.2f}",
             axis=1
         )
     else:
-        results['or_formatted'] = results['odds_ratio'].apply(lambda x: f"{x:.2f}")
+        results['or_formatted'] = results[or_col].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A")
 
     # Significance stars
     def get_stars(p):
+        if pd.isna(p):
+            return ''
         if p < 0.001:
             return '***'
         elif p < 0.01:
@@ -554,14 +617,14 @@ def format_odds_ratios_for_stakeholders(
             return '*'
         return ''
 
-    results['significance'] = results['p_value'].apply(get_stars)
+    results['significance'] = results[p_value_col].apply(get_stars)
 
     # Plain English interpretation
     def interpret_or(row):
-        or_val = row['odds_ratio']
-        p_val = row['p_value']
+        or_val = row[or_col]
+        p_val = row[p_value_col]
 
-        if p_val >= significance_level:
+        if pd.isna(p_val) or p_val >= significance_level:
             return "No significant effect"
 
         if pd.isna(or_val) or or_val <= 0:
@@ -586,10 +649,11 @@ def format_odds_ratios_for_stakeholders(
 
     # Impact category based on OR magnitude
     def categorize_impact(row):
-        if row['p_value'] >= significance_level:
+        p_val = row[p_value_col]
+        if pd.isna(p_val) or p_val >= significance_level:
             return "NOT SIGNIFICANT"
 
-        or_val = row['odds_ratio']
+        or_val = row[or_col]
         if pd.isna(or_val) or or_val <= 0:
             return "INVALID"
 
