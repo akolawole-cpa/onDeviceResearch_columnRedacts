@@ -4,35 +4,35 @@ Data Loaders Module
 Functions for loading data from Delta tables and processing wonky study UUIDs.
 """
 
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, lit
+from pyspark.sql import SparkSession, DataFrame
+from pyspark.sql.functions import col, lit, row_number
+from pyspark.sql.window import Window
 from typing import List, Optional, Dict, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
-import pandas as pd
 
 
 def load_delta_table(
     spark: SparkSession,
     path: str,
     filters: Optional[Dict[str, str]] = None
-):
+) -> DataFrame:
     """
     Load a Delta table with optional filters.
     
-    Parameters:
-    -----------
+    Parameters
+    ----------
     spark : SparkSession
-        Spark session object
     path : str
         Path to the Delta table
     filters : dict, optional
-        Dictionary of column: value filters to apply
+        Column: value filters. Values can be:
+        - str: exact match
+        - tuple (min, max): range filter (None for unbounded)
         
-    Returns:
-    --------
+    Returns
+    -------
     DataFrame
-        Spark DataFrame
     """
     df = spark.read.format("delta").load(path)
     
@@ -41,7 +41,6 @@ def load_delta_table(
             if isinstance(value, str):
                 df = df.filter(col(column) == value)
             elif isinstance(value, tuple) and len(value) == 2:
-                # Handle range filters (min, max)
                 if value[0] is not None:
                     df = df.filter(col(column) >= value[0])
                 if value[1] is not None:
@@ -54,29 +53,9 @@ def load_user_table(
     spark: SparkSession,
     silver_path: str,
     country: str = "GB"
-):
-    """
-    Load user table filtered by country.
-    
-    Parameters:
-    -----------
-    spark : SparkSession
-        Spark session object
-    silver_path : str
-        Base path to silver layer
-    country : str
-        Country filter (default: "GB")
-        
-    Returns:
-    --------
-    DataFrame
-        Spark DataFrame with user data
-    """
-    return load_delta_table(
-        spark,
-        f"{silver_path}user",
-        filters={"country": country}
-    )
+) -> DataFrame:
+    """Load user table filtered by country."""
+    return load_delta_table(spark, f"{silver_path}user", filters={"country": country})
 
 
 def load_task_complete_table(
@@ -84,64 +63,55 @@ def load_task_complete_table(
     silver_path: str,
     min_date: str = "2025-10-10",
     task_origin: str = "odr"
-):
-    """
-    Load task_complete table with date and origin filters.
-    
-    Parameters:
-    -----------
-    spark : SparkSession
-        Spark session object
-    silver_path : str
-        Base path to silver layer
-    min_date : str
-        Minimum date filter (YYYY-MM-DD format)
-    task_origin : str
-        Task origin filter (default: "odr")
-        
-    Returns:
-    --------
-    DataFrame
-        Spark DataFrame with task completion data
-    """
-    from pyspark.sql.functions import col as F_col
-    
+) -> DataFrame:
+    """Load task_complete table with date and origin filters."""
     df = spark.read.format("delta").load(f"{silver_path}task_complete")
-    df = df.filter(F_col("date_completed") >= min_date)
-    df = df.filter(F_col("taskOrigin") == task_origin)
-    
-    return df
+    return df.filter(
+        (col("date_completed") >= min_date) & 
+        (col("taskOrigin") == task_origin)
+    )
 
 
 def load_respondent_info_table(
     spark: SparkSession,
     silver_path: str,
-    country: str = "GB"
-):
+    country: str = "GB",
+    exclude_cols: Optional[List[str]] = None
+) -> DataFrame:
     """
     Load respondent_info table with profile columns expanded.
     
-    Parameters:
-    -----------
+    Parameters
+    ----------
     spark : SparkSession
-        Spark session object
     silver_path : str
         Base path to silver layer
     country : str
         Country filter (default: "GB")
+    exclude_cols : list, optional
+        List of column names to exclude from the result.
+        Useful for reducing memory footprint by dropping unused profile columns.
         
-    Returns:
-    --------
+    Returns
+    -------
     DataFrame
-        Spark DataFrame with respondent info and profile data
+        Respondent info with profile columns expanded, minus any excluded columns
+        
+    Example
+    -------
+    >>> # Load with exclusions from config
+    >>> s_ri = load_respondent_info_table(
+    ...     spark, silver_path, country="GB",
+    ...     exclude_cols=wonky_config.get('cols_to_exclude_respondent_info', [])
+    ... )
     """
-    df = load_delta_table(
-        spark,
-        f"{silver_path}respondent_info",
-        filters={"country": country}
-    )
-    
+    df = load_delta_table(spark, f"{silver_path}respondent_info", filters={"country": country})
     df = df.select("respondent_pk", "profile.*")
+    
+    # Exclude specified columns if provided
+    if exclude_cols:
+        cols_to_keep = [c for c in df.columns if c not in exclude_cols]
+        df = df.select(*cols_to_keep)
     
     return df
 
@@ -150,42 +120,88 @@ def load_task_table(
     spark: SparkSession,
     silver_path: str,
     origin: str = "odr"
-):
-    """
-    Load task table with column renaming.
+) -> DataFrame:
+    """Load task table with column renaming to avoid conflicts."""
+    df = load_delta_table(spark, f"{silver_path}task", filters={"origin": origin})
     
-    Parameters:
-    -----------
-    spark : SparkSession
-        Spark session object
-    silver_path : str
-        Base path to silver layer
-    origin : str
-        Task origin filter (default: "odr")
-        
-    Returns:
-    --------
-    DataFrame
-        Spark DataFrame with task data
-    """
-    df = load_delta_table(
-        spark,
-        f"{silver_path}task",
-        filters={"origin": origin}
-    )
+    renames = {
+        "pk": "task_pk",
+        "origin_id": "task_origin_id",
+        "targeting_type": "task_targeting_type",
+        "length_of_task": "task_length_of_task",
+        "country": "task_country",
+        "category": "task_category",
+        "points": "task_points"
+    }
     
-    # Rename columns to avoid conflicts
-    df = (
-        df.withColumnRenamed("pk", "task_pk")
-        .withColumnRenamed("origin_id", "task_origin_id")
-        .withColumnRenamed("targeting_type", "task_targeting_type")
-        .withColumnRenamed("length_of_task", "task_length_of_task")
-        .withColumnRenamed("country", "task_country")
-        .withColumnRenamed("category", "task_category")
-        .withColumnRenamed("points", "task_points")
-    )
+    for old_name, new_name in renames.items():
+        if old_name in df.columns:
+            df = df.withColumnRenamed(old_name, new_name)
     
     return df
+
+
+def load_ditr_table(
+    spark: SparkSession,
+    silver_path: str,
+    user_df: Optional[DataFrame] = None,
+    select_cols: Optional[List[str]] = None
+) -> DataFrame:
+    """
+    Load device_id_to_respondent (DITR) table with latest record per respondent.
+    
+    This table contains device/hardware information that can be joined with user data
+    to enrich the dataset with manufacturer, hardware, OS version, and app version info.
+    
+    Parameters
+    ----------
+    spark : SparkSession
+    silver_path : str
+        Base path to silver layer
+    user_df : DataFrame, optional
+        If provided, filters DITR to only include respondents in this DataFrame.
+        This is useful for filtering to a specific country.
+    select_cols : list, optional
+        Columns to select. Defaults to common device info columns.
+        
+    Returns
+    -------
+    DataFrame
+        DITR data with one row per respondent (most recent device record)
+        
+    Example
+    -------
+    >>> s_user = load_user_table(spark, silver_path, country="GB")
+    >>> s_ditr = load_ditr_table(spark, silver_path, user_df=s_user)
+    >>> # s_ditr now contains device info for GB users only
+    """
+    if select_cols is None:
+        select_cols = [
+            'respondent_pk', 'date_created', 'limit_ad_tracking',
+            'app_version', 'hardware', 'manufacturer', 'os', 'os_version'
+        ]
+    
+    ditr = spark.read.format("delta").load(f"{silver_path}device_id_to_respondent")
+    
+    # Get most recent record per respondent
+    window_spec = Window.partitionBy("respondent_pk").orderBy(col("date_created").desc())
+    latest_ditr = (
+        ditr
+        .withColumn("_row_num", row_number().over(window_spec))
+        .filter(col("_row_num") == 1)
+        .drop("_row_num")
+    )
+    
+    # Filter to users if provided (e.g., for country filtering)
+    if user_df is not None:
+        latest_ditr = (
+            user_df.select('respondent_pk')
+            .join(latest_ditr, 'respondent_pk', 'left')
+        )
+    
+    # Select requested columns that exist
+    available_cols = [c for c in select_cols if c in latest_ditr.columns]
+    return latest_ditr.select(*available_cols)
 
 
 def load_wonky_study_balance(
@@ -193,25 +209,24 @@ def load_wonky_study_balance(
     uuid: str,
     base_path: str = "/mnt/project-repository-prod",
     cols_to_include: Optional[List[str]] = None
-):
+) -> Optional[DataFrame]:
     """
     Load balance table for a specific wonky study UUID.
     
-    Parameters:
-    -----------
+    Parameters
+    ----------
     spark : SparkSession
-        Spark session object
     uuid : str
         Study UUID
     base_path : str
         Base path to project repository
     cols_to_include : list, optional
-        List of columns to include in the subset
+        Columns to include in the subset
         
-    Returns:
-    --------
-    DataFrame
-        Spark DataFrame with balance data for the study
+    Returns
+    -------
+    DataFrame or None
+        Balance data for the study, or None if loading fails
     """
     try:
         balance = spark.read.format("delta").load(
@@ -224,9 +239,7 @@ def load_wonky_study_balance(
             available_cols = [c for c in cols_to_include if c in balance_subset.columns]
             balance_subset = balance_subset.select(*available_cols)
         
-        balance_subset = balance_subset.withColumn("uuid", lit(uuid))
-        
-        return balance_subset
+        return balance_subset.withColumn("uuid", lit(uuid))
         
     except Exception as e:
         print(f"WARNING: Failed to load UUID {uuid}: {str(e)[:100]}")
@@ -241,88 +254,80 @@ def load_all_wonky_studies(
     verbose: bool = True,
     max_workers: int = 8,
     parallel: bool = True
-) -> Tuple[List, List[str]]:
+) -> Tuple[List[DataFrame], List[str]]:
     """
     Load balance tables for all wonky study UUIDs.
 
     Uses parallel loading with ThreadPoolExecutor for improved performance
     on I/O bound operations (5-15x speedup for 100+ UUIDs).
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     spark : SparkSession
-        Spark session object
     uuids : List[str]
         List of study UUIDs
     base_path : str
         Base path to project repository
     cols_to_include : list, optional
-        List of columns to include
+        Columns to include
     verbose : bool
         Whether to print progress
     max_workers : int
-        Maximum number of parallel workers (default: 8)
+        Maximum parallel workers (default: 8)
     parallel : bool
-        If True, use parallel loading. If False, use sequential (for debugging)
+        If True, use parallel loading; if False, use sequential (for debugging)
 
-    Returns:
-    --------
-    Tuple[List, List[str]]
+    Returns
+    -------
+    Tuple[List[DataFrame], List[str]]
         (list of DataFrames, list of failed UUIDs)
     """
-    if not parallel:
-        # Sequential fallback for debugging
-        balance_dfs = []
-        failed_uuids = []
-
-        for i, uuid in enumerate(uuids, 1):
-            balance_df = load_wonky_study_balance(
-                spark, uuid, base_path, cols_to_include
-            )
-
-            if balance_df is not None:
-                balance_dfs.append(balance_df)
-            else:
-                failed_uuids.append(uuid)
-
-            if verbose and i % 10 == 0:
-                print(f"  Processed {i}/{len(uuids)} studies...")
-
-        if verbose and len(uuids) % 10 != 0:
-            print(f"  Processed {len(uuids)}/{len(uuids)} studies...")
-
-        return balance_dfs, failed_uuids
-
-    # Parallel loading with ThreadPoolExecutor
+    if not uuids:
+        return [], []
+    
     balance_dfs = []
     failed_uuids = []
-    lock = threading.Lock()
+    
+    if not parallel:
+        # Sequential fallback for debugging
+        for i, uuid in enumerate(uuids, 1):
+            df = load_wonky_study_balance(spark, uuid, base_path, cols_to_include)
+            if df is not None:
+                balance_dfs.append(df)
+            else:
+                failed_uuids.append(uuid)
+            
+            if verbose and i % 10 == 0:
+                print(f"  Processed {i}/{len(uuids)} studies...")
+        
+        return balance_dfs, failed_uuids
 
+    # Parallel loading
+    lock = threading.Lock()
+    
     def load_single(uuid: str):
-        """Load a single UUID and return (uuid, result)."""
         return uuid, load_wonky_study_balance(spark, uuid, base_path, cols_to_include)
 
     if verbose:
         print(f"  Loading {len(uuids)} studies with {max_workers} parallel workers...")
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks
         futures = {executor.submit(load_single, uuid): uuid for uuid in uuids}
-
         completed = 0
+        
         for future in as_completed(futures):
             try:
-                uuid, balance_df = future.result()
+                uuid, df = future.result()
                 with lock:
-                    if balance_df is not None:
-                        balance_dfs.append(balance_df)
+                    if df is not None:
+                        balance_dfs.append(df)
                     else:
                         failed_uuids.append(uuid)
                     completed += 1
-
+                
                 if verbose and completed % 10 == 0:
                     print(f"  Processed {completed}/{len(uuids)} studies...")
-
+                    
             except Exception as e:
                 uuid = futures[future]
                 with lock:
@@ -331,11 +336,7 @@ def load_all_wonky_studies(
                 if verbose:
                     print(f"  WARNING: Exception loading {uuid}: {str(e)[:50]}")
 
-    if verbose and len(uuids) % 10 != 0:
-        print(f"  Processed {len(uuids)}/{len(uuids)} studies...")
-
     if verbose:
         print(f"  Successfully loaded: {len(balance_dfs)}, Failed: {len(failed_uuids)}")
 
     return balance_dfs, failed_uuids
-

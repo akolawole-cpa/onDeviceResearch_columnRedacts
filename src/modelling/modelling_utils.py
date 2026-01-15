@@ -26,6 +26,280 @@ warnings.filterwarnings('ignore')
 
 
 # =============================================================================
+# Outside model VIF analysis
+# =============================================================================
+
+
+def calculate_vif_detailed(
+    df: pd.DataFrame,
+    feature_cols: List[str],
+    vif_threshold_high: float = 10.0,
+    vif_threshold_moderate: float = 5.0,
+) -> pd.DataFrame:
+    """
+    Calculate VIF for all features with detailed diagnostics.
+    
+    VIF (Variance Inflation Factor) measures multicollinearity:
+    - VIF = 1: No correlation with other features
+    - VIF < 5: Low correlation (acceptable)
+    - VIF 5-10: Moderate correlation (monitor)
+    - VIF > 10: High correlation (consider removal)
+    - VIF = inf: Perfect multicollinearity (must remove)
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with features
+    feature_cols : List[str]
+        Feature columns to analyze
+    vif_threshold_high : float
+        Threshold for high VIF warning (default 10)
+    vif_threshold_moderate : float
+        Threshold for moderate VIF warning (default 5)
+    
+    Returns:
+    --------
+    pd.DataFrame
+        VIF results with flags and recommendations
+    """
+    X = df[feature_cols].copy()
+    X_clean = X.dropna()
+    
+    print(f"Calculating VIF for {len(feature_cols)} features...")
+    print(f"Using {len(X_clean)} complete observations")
+    
+    vif_results = []
+    for i, col in enumerate(feature_cols):
+        try:
+            vif_value = variance_inflation_factor(X_clean.values, i)
+        except Exception as e:
+            vif_value = np.inf
+        vif_results.append({'feature': col, 'VIF': vif_value})
+    
+    vif_df = pd.DataFrame(vif_results)
+    
+    # Add diagnostic columns
+    vif_df['vif_flag'] = vif_df['VIF'].apply(
+        lambda x: '🚨 INFINITE' if np.isinf(x) 
+        else ('⚠️ HIGH' if x > vif_threshold_high 
+        else ('⚡ MODERATE' if x > vif_threshold_moderate else '✓ OK'))
+    )
+    
+    vif_df['recommendation'] = vif_df['VIF'].apply(
+        lambda x: 'MUST REMOVE' if np.isinf(x)
+        else ('Consider removing' if x > vif_threshold_high
+        else ('Monitor' if x > vif_threshold_moderate else 'Keep'))
+    )
+    
+    # Summary
+    n_high = (vif_df['VIF'] > vif_threshold_high).sum()
+    n_moderate = ((vif_df['VIF'] > vif_threshold_moderate) & (vif_df['VIF'] <= vif_threshold_high)).sum()
+    
+    print(f"\nVIF Summary:")
+    print(f"  High VIF (>{vif_threshold_high}): {n_high}")
+    print(f"  Moderate VIF ({vif_threshold_moderate}-{vif_threshold_high}): {n_moderate}")
+    print(f"  Acceptable VIF (<{vif_threshold_moderate}): {len(vif_df) - n_high - n_moderate}")
+    
+    return vif_df.sort_values('VIF', ascending=False)
+
+
+def iterative_vif_removal(
+    df: pd.DataFrame,
+    feature_cols: List[str],
+    vif_threshold: float = 10.0,
+    max_iterations: int = 50,
+    verbose: bool = True,
+) -> Tuple[List[str], List[Tuple[str, float]], pd.DataFrame]:
+    """
+    Iteratively remove features with highest VIF until all are below threshold.
+    
+    This is the recommended approach for handling multicollinearity:
+    1. Calculate VIF for all features
+    2. Remove the feature with highest VIF (if above threshold)
+    3. Recalculate VIF (removing one feature often improves others)
+    4. Repeat until all VIF < threshold
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with features
+    feature_cols : List[str]
+        Starting feature list
+    vif_threshold : float
+        Remove features until all VIF <= this value
+    max_iterations : int
+        Safety limit on iterations
+    verbose : bool
+        Print progress
+    
+    Returns:
+    --------
+    Tuple of:
+        - cleaned_features: List of features after removal
+        - removed_features: List of (feature, vif) tuples that were removed
+        - log_df: DataFrame showing iteration history
+    """
+    current_features = feature_cols.copy()
+    removed_features = []
+    iteration_log = []
+    
+    X = df[feature_cols].dropna()
+    
+    if verbose:
+        print(f"\nStarting iterative VIF removal (threshold={vif_threshold})")
+        print(f"Initial features: {len(current_features)}")
+    
+    for iteration in range(max_iterations):
+        if len(current_features) <= 1:
+            break
+        
+        # Calculate VIF
+        X_current = X[current_features]
+        vif_values = []
+        for i, col in enumerate(current_features):
+            try:
+                vif = variance_inflation_factor(X_current.values, i)
+            except:
+                vif = np.inf
+            vif_values.append((col, vif))
+        
+        max_feature, max_vif = max(vif_values, key=lambda x: x[1])
+        
+        iteration_log.append({
+            'iteration': iteration + 1,
+            'n_features': len(current_features),
+            'max_vif_feature': max_feature,
+            'max_vif': max_vif,
+        })
+        
+        if max_vif <= vif_threshold:
+            if verbose:
+                print(f"✓ Converged: all VIF <= {vif_threshold}")
+            break
+        
+        if verbose:
+            print(f"  Iter {iteration + 1}: Remove '{max_feature}' (VIF={max_vif:.2f})")
+        
+        current_features.remove(max_feature)
+        removed_features.append((max_feature, max_vif))
+    
+    if verbose:
+        print(f"\nRemoved {len(removed_features)} features")
+        print(f"Remaining: {len(current_features)} features")
+    
+    return current_features, removed_features, pd.DataFrame(iteration_log)
+
+
+def analyze_feature_scaling_needs(
+    df: pd.DataFrame,
+    feature_cols: List[str],
+) -> pd.DataFrame:
+    """
+    Analyze whether features need standardization/scaling.
+    
+    Guidelines:
+    - Binary features (0/1): Do NOT scale - keep interpretable
+    - Continuous with small range: Usually OK without scaling
+    - Continuous with large range/variance: Consider scaling
+    
+    Note: Your modelling.py already handles this correctly:
+    - Linear regression: No scaling (coefficients stay interpretable)
+    - Logistic regression: StandardScaler applied (line 330-331)
+    - Random Forest: No scaling needed (tree-based)
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with features
+    feature_cols : List[str]
+        Features to analyze
+    
+    Returns:
+    --------
+    pd.DataFrame
+        Analysis of each feature's scaling needs
+    """
+    results = []
+    
+    for col in feature_cols:
+        col_data = df[col].dropna()
+        unique_vals = col_data.nunique()
+        is_binary = set(col_data.unique()).issubset({0, 1, 0.0, 1.0})
+        
+        # Determine feature type
+        if is_binary:
+            feature_type = 'binary'
+            scaling_needed = False
+        elif unique_vals <= 10:
+            feature_type = 'categorical/ordinal'
+            scaling_needed = False
+        else:
+            feature_type = 'continuous'
+            # Flag if large range or high variance
+            scaling_needed = col_data.std() > 10 or abs(col_data.mean()) > 100
+        
+        results.append({
+            'feature': col,
+            'type': feature_type,
+            'unique_values': unique_vals,
+            'min': col_data.min(),
+            'max': col_data.max(),
+            'mean': round(col_data.mean(), 4),
+            'std': round(col_data.std(), 4),
+            'scaling_recommended': scaling_needed,
+        })
+    
+    result_df = pd.DataFrame(results)
+    
+    # Summary
+    print("\nFeature Scaling Analysis:")
+    print(f"  Binary features: {(result_df['type'] == 'binary').sum()}")
+    print(f"  Categorical/ordinal: {(result_df['type'] == 'categorical/ordinal').sum()}")
+    print(f"  Continuous: {(result_df['type'] == 'continuous').sum()}")
+    print(f"  Scaling recommended: {result_df['scaling_recommended'].sum()}")
+    
+    return result_df
+
+
+def get_feature_removal_candidates(
+    vif_df: pd.DataFrame,
+    correlation_matrix: Optional[pd.DataFrame] = None,
+    vif_threshold: float = 10.0,
+) -> List[str]:
+    """
+    Get list of features that are candidates for removal based on VIF.
+    
+    When choosing which feature to remove from a correlated pair,
+    consider keeping the one that's:
+    - More interpretable
+    - More directly related to your research question
+    - Less noisy
+    
+    Parameters:
+    -----------
+    vif_df : pd.DataFrame
+        Output from calculate_vif_detailed()
+    correlation_matrix : pd.DataFrame, optional
+        Correlation matrix to identify which features correlate
+    vif_threshold : float
+        Threshold above which to flag features
+    
+    Returns:
+    --------
+    List[str]
+        Features recommended for removal
+    """
+    high_vif_features = vif_df[vif_df['VIF'] > vif_threshold]['feature'].tolist()
+    
+    print(f"\nFeatures with VIF > {vif_threshold}:")
+    for feat in high_vif_features:
+        vif_val = vif_df[vif_df['feature'] == feat]['VIF'].values[0]
+        print(f"  - {feat}: VIF = {vif_val:.2f}")
+    
+    return high_vif_features
+
+
+# =============================================================================
 # FEATURE PREPROCESSING
 # =============================================================================
 

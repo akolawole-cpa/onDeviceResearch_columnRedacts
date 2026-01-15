@@ -3,6 +3,7 @@
 feature_sets:
 
   tasks_completed:
+    - task_completed
     - total_tasks_1_10
     - total_tasks_11_25
     - total_tasks_26_75
@@ -28,6 +29,7 @@ feature_sets:
 
 # Mutually exclusive bins
   days_active_exclusive:
+    - days_active_before_task
     - days_active_0_to_2
     - days_active_3_to_10
     - days_active_11_to_20
@@ -97,18 +99,29 @@ feature_sets:
     - is_slow
     - is_suspiciously_slow
 
-  # quality:
-  #   - quality=100
-  #   - quality<90
-  #   - quality<75
-  #   - quality<50
-  #   - quality<30
+  quality:
+    - quality
+    - quality_round10_0
+    - quality_round10_20
+    - quality_round10_30
+    - quality_round10_40
+    - quality_round10_50
+    - quality_round10_60
+    - quality_round10_70
+    - quality_round10_80
+    - quality_round10_90
+    - quality_round10_100
 
-  # risk:
-  #   - risk=100
-  #   - risk<90
-  #   - risk<80
-  #   - risk<50
+  risk:
+    - risk
+    - risk_round10_0
+    - risk_round10_20,
+    - risk_round10_30,
+    - risk_round10_40,
+    - risk_round10_50,
+    - risk_round10_70
+    - risk_round10_80
+    - risk_round10_100
 
   gender:
     - gender_female
@@ -151,39 +164,120 @@ feature_sets:
     - "gambling_participation_mc_online sports betting"
     - gambling_participation_mc_other
 
-  platform: # to replace
-    - platform_name_Android
-    - platform_name_iOS
-    - platform_name_Linux
-    - platform_name_Mac OS X
-    - platform_name_Windows
-    - platform_name_Unknown
+  # platform:
+  #   - platform_name_Android
+  #   - platform_name_iOS
+  #   - platform_name_Linux
+  #   - platform_name_Mac OS X
+  #   - platform_name_Windows
+  #   - platform_name_Unknown
 
-  device: # to replace
-    - device_Android
-    - device_iOS
-    - device_Windows
-    - device_Linux
-    - device_ChromeOS
-    - device_Tizen
-    - device_Unknown
+  # device:
+  #   - device_Android
+  #   - device_iOS
+  #   - device_Windows
+  #   - device_Linux
+  #   - device_ChromeOS
+  #   - device_Tizen
+  #   - device_Unknown
 
-  hardware: # to replace
-    - hardware_version_iPhone
-    - hardware_version_iPod Touch
-    - hardware_version_Desktop
-    - hardware_version_Macintosh
-    - hardware_version_Baoxue
-    - hardware_version_Fablet
-    - hardware_version_G2
-    - "hardware_version_Galaxy Note 4"
-    - "hardware_version_Generic Android"
-    - "hardware_version_IDOL 3 6045Y"
-    - hardware_version_L9
-    - "hardware_version_P8 Standard"
-    - hardware_version_RocStar
-    - hardware_version_ShotX
-    - "hardware_version_Xperia E3 Dual"
+  # Legacy hardware (from balance tables) - DEPRECATED
+  # hardware:
+  #   - hardware_version_iPhone
+  #   - hardware_version_iPod Touch
+  #   - hardware_version_Desktop
+  #   - hardware_version_Macintosh
+  #   - hardware_version_Baoxue
+  #   - hardware_version_Fablet
+  #   - hardware_version_G2
+  #   - "hardware_version_Galaxy Note 4"
+  #   - "hardware_version_Generic Android"
+  #   - "hardware_version_IDOL 3 6045Y"
+  #   - hardware_version_L9
+  #   - "hardware_version_P8 Standard"
+  #   - hardware_version_RocStar
+  #   - hardware_version_ShotX
+  #   - "hardware_version_Xperia E3 Dual"
+
+  # NEW: Hardware categories from DITR table (reduced cardinality)
+  hardware_category:
+    # Apple iPhone by generation
+    - hardware_category_iphone_16
+    - hardware_category_iphone_15
+    - hardware_category_iphone_14
+    - hardware_category_iphone_13
+    - hardware_category_iphone_x_series
+    - hardware_category_iphone_se
+    - hardware_category_iphone_legacy
+    # Google
+    - hardware_category_google_pixel
+    # Samsung Exynos by tier
+    - hardware_category_exynos_flagship
+    - hardware_category_exynos_upper_mid
+    - hardware_category_exynos_mid
+    - hardware_category_exynos_budget
+    # MediaTek by tier
+    - hardware_category_mediatek_flagship
+    - hardware_category_mediatek_upper_mid
+    - hardware_category_mediatek_mid
+    - hardware_category_mediatek_budget
+    # Qualcomm
+    - hardware_category_qualcomm
+    # Huawei Kirin
+    - hardware_category_kirin_flagship
+    - hardware_category_kirin_mid
+    - hardware_category_kirin_other
+    # Budget/Other
+    - hardware_category_unisoc_budget
+    - hardware_category_itel_budget
+    - hardware_category_realme
+    - hardware_category_xiaomi
+    - hardware_category_samsung_other
+    - hardware_category_lg
+    - hardware_category_tcl
+    - hardware_category_microsoft_surface
+    - hardware_category_other
+    - hardware_category_unknown
+
+  # NEW: Manufacturer categories from DITR table (reduced cardinality)
+  manufacturer_category:
+    # Major brands
+    - manufacturer_category_apple
+    - manufacturer_category_samsung
+    - manufacturer_category_google
+    - manufacturer_category_xiaomi
+    - manufacturer_category_huawei_honor
+    - manufacturer_category_oppo
+    - manufacturer_category_vivo
+    - manufacturer_category_oneplus
+    - manufacturer_category_realme
+    - manufacturer_category_motorola
+    - manufacturer_category_nothing
+    - manufacturer_category_sony
+    # Transsion group (Tecno/Infinix/Itel)
+    - manufacturer_category_transsion
+    # Budget Chinese brands
+    - manufacturer_category_budget_chinese
+    # Other known brands
+    - manufacturer_category_tcl
+    - manufacturer_category_hmd_nokia
+    - manufacturer_category_lenovo
+    - manufacturer_category_zte_nubia
+    - manufacturer_category_asus
+    - manufacturer_category_lg
+    - manufacturer_category_htc
+    - manufacturer_category_meizu
+    - manufacturer_category_wiko
+    - manufacturer_category_hisense
+    - manufacturer_category_fairphone
+    - manufacturer_category_microsoft
+    # Special categories
+    - manufacturer_category_rugged_enterprise
+    - manufacturer_category_japanese_other
+    - manufacturer_category_tablet_other
+    - manufacturer_category_odm_reference
+    - manufacturer_category_other
+    - manufacturer_category_unknown
 
   exposure:
     - exposure_band_control
@@ -216,7 +310,7 @@ feature_sets:
     - ip_address_count_4
     - ip_address_count_5
 
-employer_industry:
+  employer_industry:
     - employer_industry_mapped_Accounting
     - employer_industry_mapped_Advertising
     - employer_industry_mapped_Agriculture/Fishing
@@ -270,7 +364,7 @@ employer_industry:
     - employer_industry_mapped_Transportation
     - employer_industry_mapped_nan
 
-employer_department:
+  employer_department:
     - employer_department_mapped_Administration/General Staff
     - employer_department_mapped_Customer Service/Client Service
     - employer_department_mapped_Executive Leadership
@@ -288,7 +382,7 @@ employer_department:
     - employer_department_mapped_Technology Implementation
     - employer_department_mapped_nan
 
- region:
+  region:
     - fulcrum_region_mapped_East Midlands (England)
     - fulcrum_region_mapped_East Of England
     - fulcrum_region_mapped_London
@@ -303,47 +397,73 @@ employer_department:
     - fulcrum_region_mapped_Yorkshire And The Humber
     - fulcrum_region_mapped_nan
 
-test_settings:
-  significance_level: 0.05
-  bonferroni_correction: true
-  outcome_var: "wonky_study_count"
-  user_id_var: "respondentPk"
-  min_sample_size: 30
+  ditr_os:
+    - ditr_os_android
+    - ditr_os_ios
 
-feature_groups:
-  behavioral:
-    - tasks_completed
-    - days_active_cumulative
-    - days_active_exclusive
-    - task_speed
-    - entry_point
+  task_title:
+    - "taskTitle_02959 Nexus - GTR - Control"
+    - "taskTitle_Awesome advertising task!"
+    - "taskTitle_Earn 10 points by taking this quick survey!!"
+    - "taskTitle_Earn 10 points for these quick questions!!"
+    - "taskTitle_Earn 100 points for this short fun survey!"
+    - "taskTitle_Earn 20 points by taking this quick survey!!"
+    - "taskTitle_Earn 20 points for answering 2 quick questions!!"
+    - "taskTitle_Earn 40 points by taking this quick survey!!"
+    - "taskTitle_Earn 5 Points for answering these quick questions!"
+    - "taskTitle_Earn 50 points by taking this quick survey!!"
+    - "taskTitle_Earn 50 points over 2 short tasks!"
+    - "taskTitle_Earn 80 points by taking this quick survey!!"
+    - "taskTitle_Fai un rapido sondaggio e ottieni 10 punti!"
+    - "taskTitle_Final follow-up task!"
 
-  temporal:
-    - temporal_day_of_week
-    - temporal_business_hours
-    - temporal_time_of_day
+  misc:
+    - age_YOB
 
-  demographic:
-    - gender
-    - income
-    - region
-    - employer_industry
-    - employer_department
 
-  platform:
-    - platform
-    - device
-    - hardware
+# test_settings:
+#   significance_level: 0.05
+#   bonferroni_correction: true
+#   outcome_var: "wonky_study_count"
+#   user_id_var: "respondentPk"
+#   min_sample_size: 30
 
-  user_settings:
-    - email_verification
-    - share_location_data
-    - notify_new_task
-    - notify_task_payout
+# feature_groups:
+#   behavioral:
+#     - tasks_completed
+#     - days_active_cumulative
+#     - days_active_exclusive
+#     - task_speed
+#     - entry_point
 
-  quality_risk:
-    - quality
-    - risk
+#   temporal:
+#     - temporal_day_of_week
+#     - temporal_business_hours
+#     - temporal_time_of_day
 
-  experimental:
-    - exposure
+#   demographic:
+#     - gender
+#     - income
+#     - region
+#     - employer_industry
+#     - employer_department
+
+#   platform:
+#     - platform
+#     - device
+#     - hardware_category      # Updated from 'hardware'
+#     - manufacturer_category  # NEW
+#     - ditr_os
+
+#   user_settings:
+#     - email_verification
+#     - share_location_data
+#     - notify_new_task
+#     - notify_task_payout
+
+#   quality_risk:
+#     - quality
+#     - risk
+
+#   experimental:
+#     - exposure
