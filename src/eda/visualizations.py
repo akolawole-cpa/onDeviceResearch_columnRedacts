@@ -515,3 +515,345 @@ def compute_exposure_and_gender_counts(
     counts["pct"] = counts["n"] / counts["group_total"] * 100
 
     return counts
+
+
+# =============================================================================
+# STAKEHOLDER-FRIENDLY VISUALIZATION FUNCTIONS
+# =============================================================================
+
+def create_coefficient_forest_plot(
+    results_df: pd.DataFrame,
+    coefficient_col: str = 'mean_difference',
+    ci_lower_col: str = 'ci_lower',
+    ci_upper_col: str = 'ci_upper',
+    p_value_col: str = 'p_value',
+    feature_col: str = 'feature',
+    title: str = "Feature Effects with 95% Confidence Intervals",
+    max_features: int = 20,
+    significance_level: float = 0.05,
+) -> go.Figure:
+    """
+    Create forest plot showing coefficients with confidence intervals.
+
+    Visual elements:
+    - Horizontal bars for point estimates
+    - Error bars for confidence intervals
+    - Color coding: green=protective, red=risk, gray=not significant
+    - Vertical line at 0 (null effect)
+
+    Parameters
+    ----------
+    results_df : pd.DataFrame
+        DataFrame with coefficient, CI, and p-value columns
+    coefficient_col : str
+        Column name for coefficient values
+    ci_lower_col : str
+        Column name for CI lower bound
+    ci_upper_col : str
+        Column name for CI upper bound
+    p_value_col : str
+        Column name for p-values
+    feature_col : str
+        Column name for feature names
+    title : str
+        Chart title
+    max_features : int
+        Maximum number of features to display
+    significance_level : float
+        P-value threshold for significance coloring
+
+    Returns
+    -------
+    go.Figure
+        Plotly figure
+    """
+    df = results_df.reset_index() if feature_col not in results_df.columns else results_df.copy()
+
+    # Sort by absolute effect size and take top N
+    df['abs_effect'] = df[coefficient_col].abs()
+    df = df.nlargest(max_features, 'abs_effect')
+    df = df.sort_values(coefficient_col)
+
+    # Color by direction and significance
+    colors = []
+    for _, row in df.iterrows():
+        if row[p_value_col] >= significance_level:
+            colors.append('#888888')  # Gray for non-significant
+        elif row[coefficient_col] > 0:
+            colors.append('#e74c3c')  # Red for increases risk
+        else:
+            colors.append('#27ae60')  # Green for decreases risk
+
+    # Calculate error bar values
+    error_plus = df[ci_upper_col] - df[coefficient_col]
+    error_minus = df[coefficient_col] - df[ci_lower_col]
+
+    fig = go.Figure()
+
+    # Add points with error bars
+    fig.add_trace(go.Scatter(
+        x=df[coefficient_col],
+        y=df[feature_col],
+        mode='markers',
+        marker=dict(size=10, color=colors),
+        error_x=dict(
+            type='data',
+            symmetric=False,
+            array=error_plus,
+            arrayminus=error_minus,
+            color='rgba(0,0,0,0.3)',
+            thickness=1.5,
+        ),
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Effect: %{x:.4f}<br>"
+            "<extra></extra>"
+        ),
+    ))
+
+    # Add vertical line at 0 (null effect)
+    fig.add_vline(x=0, line_dash="dash", line_color="black", opacity=0.5)
+
+    # Add annotations
+    fig.add_annotation(
+        x=0.02,
+        y=1.05,
+        xref="paper",
+        yref="paper",
+        text="<b>Green</b> = Protective (decreases risk) | <b>Red</b> = Risk Factor (increases risk) | <b>Gray</b> = Not Significant",
+        showarrow=False,
+        font=dict(size=10),
+    )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Effect Size (Coefficient)",
+        yaxis_title="Feature",
+        height=400 + len(df) * 25,
+        showlegend=False,
+        template='plotly_white',
+        margin=dict(l=200, t=80),
+    )
+
+    return fig
+
+
+def create_odds_ratio_plot(
+    results_df: pd.DataFrame,
+    or_col: str = 'odds_ratio',
+    ci_lower_col: str = 'or_ci_lower',
+    ci_upper_col: str = 'or_ci_upper',
+    p_value_col: str = 'p_value',
+    feature_col: str = 'feature',
+    title: str = "Odds Ratios with 95% Confidence Intervals",
+    max_features: int = 20,
+    significance_level: float = 0.05,
+) -> go.Figure:
+    """
+    Create forest plot for odds ratios (log scale).
+
+    Visual elements:
+    - Log scale x-axis (OR=1 is neutral)
+    - Vertical line at OR=1
+    - Color coding: green=protective (OR<1), red=risk (OR>1), gray=not significant
+
+    Parameters
+    ----------
+    results_df : pd.DataFrame
+        DataFrame with OR, CI, and p-value columns
+    or_col : str
+        Column name for odds ratio values
+    ci_lower_col : str
+        Column name for CI lower bound
+    ci_upper_col : str
+        Column name for CI upper bound
+    p_value_col : str
+        Column name for p-values
+    feature_col : str
+        Column name for feature names
+    title : str
+        Chart title
+    max_features : int
+        Maximum number of features to display
+    significance_level : float
+        P-value threshold for significance coloring
+
+    Returns
+    -------
+    go.Figure
+        Plotly figure
+    """
+    df = results_df.reset_index() if feature_col not in results_df.columns else results_df.copy()
+
+    # Filter valid ORs
+    df = df[(df[or_col] > 0.01) & (df[or_col] < 100)].copy()
+
+    # Sort by distance from 1 (log scale) and take top N
+    df['log_or'] = np.log(df[or_col])
+    df['abs_log_or'] = df['log_or'].abs()
+    df = df.nlargest(max_features, 'abs_log_or')
+    df = df.sort_values('log_or')
+
+    # Color by direction and significance
+    colors = []
+    for _, row in df.iterrows():
+        if row[p_value_col] >= significance_level:
+            colors.append('#888888')  # Gray for non-significant
+        elif row[or_col] > 1:
+            colors.append('#e74c3c')  # Red for increases risk
+        else:
+            colors.append('#27ae60')  # Green for decreases risk
+
+    # Check if CI columns exist
+    has_ci = ci_lower_col in df.columns and ci_upper_col in df.columns
+
+    fig = go.Figure()
+
+    if has_ci:
+        # Calculate error bar values for log scale
+        error_plus = np.log(df[ci_upper_col]) - np.log(df[or_col])
+        error_minus = np.log(df[or_col]) - np.log(df[ci_lower_col])
+
+        fig.add_trace(go.Scatter(
+            x=df['log_or'],
+            y=df[feature_col],
+            mode='markers',
+            marker=dict(size=10, color=colors),
+            error_x=dict(
+                type='data',
+                symmetric=False,
+                array=error_plus,
+                arrayminus=error_minus,
+                color='rgba(0,0,0,0.3)',
+                thickness=1.5,
+            ),
+            customdata=df[or_col],
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Odds Ratio: %{customdata:.2f}<br>"
+                "<extra></extra>"
+            ),
+        ))
+    else:
+        fig.add_trace(go.Scatter(
+            x=df['log_or'],
+            y=df[feature_col],
+            mode='markers',
+            marker=dict(size=10, color=colors),
+            customdata=df[or_col],
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Odds Ratio: %{customdata:.2f}<br>"
+                "<extra></extra>"
+            ),
+        ))
+
+    # Add vertical line at OR=1 (log(1)=0)
+    fig.add_vline(x=0, line_dash="dash", line_color="black", opacity=0.5)
+
+    # Add annotations
+    fig.add_annotation(
+        x=0.02,
+        y=1.05,
+        xref="paper",
+        yref="paper",
+        text="<b>Green</b> = Protective (OR<1) | <b>Red</b> = Risk Factor (OR>1) | <b>Gray</b> = Not Significant",
+        showarrow=False,
+        font=dict(size=10),
+    )
+
+    # Custom tick labels showing actual OR values
+    log_ticks = [-2, -1, -0.5, 0, 0.5, 1, 2]
+    or_labels = [f"{np.exp(t):.2f}" for t in log_ticks]
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Odds Ratio (log scale)",
+        yaxis_title="Feature",
+        height=400 + len(df) * 25,
+        showlegend=False,
+        template='plotly_white',
+        margin=dict(l=200, t=80),
+        xaxis=dict(
+            tickmode='array',
+            tickvals=log_ticks,
+            ticktext=or_labels,
+        ),
+    )
+
+    return fig
+
+
+def create_model_comparison_heatmap(
+    comparison_df: pd.DataFrame,
+    feature_col: str = 'feature',
+    rank_cols: Optional[List[str]] = None,
+    max_features: int = 20,
+    title: str = "Feature Importance Ranking Across Models",
+) -> go.Figure:
+    """
+    Create heatmap showing feature ranking across different models.
+
+    Parameters
+    ----------
+    comparison_df : pd.DataFrame
+        DataFrame with feature rankings from multiple models
+    feature_col : str
+        Column name for feature names
+    rank_cols : List[str], optional
+        List of rank column names. If None, auto-detect columns ending in '_rank'
+    max_features : int
+        Maximum features to show
+    title : str
+        Chart title
+
+    Returns
+    -------
+    go.Figure
+        Plotly heatmap figure
+    """
+    df = comparison_df.copy()
+
+    # Auto-detect rank columns if not provided
+    if rank_cols is None:
+        rank_cols = [c for c in df.columns if c.endswith('_rank') or c.endswith('_importance')]
+
+    if not rank_cols:
+        raise ValueError("No rank columns found. Provide rank_cols parameter.")
+
+    # Take top N features
+    if 'avg_rank' in df.columns:
+        df = df.nsmallest(max_features, 'avg_rank')
+    else:
+        df = df.head(max_features)
+
+    # Prepare data for heatmap
+    features = df[feature_col].tolist()
+    z_data = df[rank_cols].values.T
+
+    # Create heatmap
+    fig = go.Figure(data=go.Heatmap(
+        z=z_data,
+        x=features,
+        y=[c.replace('_rank', '').replace('_importance', '').title() for c in rank_cols],
+        colorscale='RdYlGn_r',  # Reversed: green=low rank (important), red=high rank
+        text=[[f"{val:.1f}" for val in row] for row in z_data],
+        texttemplate="%{text}",
+        hovertemplate=(
+            "Feature: %{x}<br>"
+            "Model: %{y}<br>"
+            "Rank: %{z:.1f}<br>"
+            "<extra></extra>"
+        ),
+    ))
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Feature",
+        yaxis_title="Model",
+        height=200 + len(rank_cols) * 50,
+        xaxis=dict(tickangle=45),
+        template='plotly_white',
+    )
+
+    return fig

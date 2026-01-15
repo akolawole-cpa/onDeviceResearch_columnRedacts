@@ -393,5 +393,335 @@ def run_combined_regression_tests(
     
     if 'ols_t_statistic' in combined.columns:
         combined = combined.sort_values('ols_t_statistic', key=abs, ascending=False)
-    
+
     return combined
+
+
+# =============================================================================
+# STAKEHOLDER-FRIENDLY FORMATTING FUNCTIONS
+# =============================================================================
+
+def format_ols_for_stakeholders(
+    ols_results: pd.DataFrame,
+    baseline_mean: float,
+    confidence_level: float = 0.95,
+    significance_level: float = 0.05,
+) -> pd.DataFrame:
+    """
+    Format OLS results with stakeholder-friendly interpretations.
+
+    Parameters
+    ----------
+    ols_results : pd.DataFrame
+        Output from OLS_with_cluster_robust_test()
+    baseline_mean : float
+        Mean of outcome variable (for percentage calculations)
+    confidence_level : float
+        Confidence level for intervals (default 0.95)
+    significance_level : float
+        Threshold for significance stars
+
+    Returns
+    -------
+    pd.DataFrame with columns:
+        - feature: Feature name
+        - coefficient: Raw coefficient value
+        - ci_lower, ci_upper: Confidence interval bounds
+        - ci_formatted: "coef [lower, upper]" string
+        - pct_change: Coefficient as % of baseline
+        - p_value: Raw p-value
+        - significance: Stars (*** / ** / *)
+        - interpretation: Plain English description
+        - impact_category: HIGH/MEDIUM/LOW/NOT SIGNIFICANT
+    """
+    from scipy import stats
+
+    results = ols_results.reset_index() if 'feature' not in ols_results.columns else ols_results.copy()
+
+    # Calculate confidence intervals
+    z_crit = stats.norm.ppf((1 + confidence_level) / 2)
+    results['ci_lower'] = results['mean_difference'] - z_crit * results['se_cluster_robust']
+    results['ci_upper'] = results['mean_difference'] + z_crit * results['se_cluster_robust']
+
+    # Formatted CI string
+    results['ci_formatted'] = results.apply(
+        lambda r: f"{r['mean_difference']:+.3f} [{r['ci_lower']:+.3f}, {r['ci_upper']:+.3f}]",
+        axis=1
+    )
+
+    # Percentage change from baseline
+    if baseline_mean != 0:
+        results['pct_change'] = (results['mean_difference'] / baseline_mean * 100).round(1)
+    else:
+        results['pct_change'] = np.nan
+
+    # Significance stars
+    def get_stars(p):
+        if p < 0.001:
+            return '***'
+        elif p < 0.01:
+            return '**'
+        elif p < 0.05:
+            return '*'
+        return ''
+
+    results['significance'] = results['p_value'].apply(get_stars)
+
+    # Plain English interpretation
+    def interpret_coefficient(row):
+        if row['p_value'] >= significance_level:
+            return "No significant effect"
+
+        coef = row['mean_difference']
+        pct = row['pct_change'] if pd.notna(row['pct_change']) else 0
+
+        if coef > 0:
+            return f"Increases wonkiness by {abs(pct):.0f}%"
+        else:
+            return f"Decreases wonkiness by {abs(pct):.0f}%"
+
+    results['interpretation'] = results.apply(interpret_coefficient, axis=1)
+
+    # Impact category based on Cohen's d
+    def categorize_impact(row):
+        if row['p_value'] >= significance_level:
+            return "NOT SIGNIFICANT"
+        d = abs(row.get('cohens_d', 0))
+        if d >= 0.8:
+            return "HIGH"
+        elif d >= 0.5:
+            return "MEDIUM"
+        elif d >= 0.2:
+            return "LOW"
+        return "NEGLIGIBLE"
+
+    results['impact_category'] = results.apply(categorize_impact, axis=1)
+
+    # Select and reorder columns
+    output_cols = [
+        'feature', 'mean_difference', 'ci_lower', 'ci_upper', 'ci_formatted',
+        'pct_change', 'p_value', 'significance', 'interpretation', 'impact_category'
+    ]
+    available_cols = [c for c in output_cols if c in results.columns]
+
+    return results[available_cols].sort_values('mean_difference', key=abs, ascending=False)
+
+
+def format_odds_ratios_for_stakeholders(
+    logit_results: pd.DataFrame,
+    significance_level: float = 0.05,
+) -> pd.DataFrame:
+    """
+    Format odds ratios with stakeholder-friendly interpretations.
+
+    Parameters
+    ----------
+    logit_results : pd.DataFrame
+        Output from logistic_regression_with_cluster_robust_test()
+    significance_level : float
+        Threshold for significance
+
+    Returns
+    -------
+    pd.DataFrame with columns:
+        - feature: Feature name
+        - odds_ratio: Raw OR value
+        - or_formatted: "OR [CI lower, CI upper]" string
+        - interpretation: Plain English (e.g., "50% more likely")
+        - p_value: Raw p-value
+        - significance: Stars
+        - impact_category: HIGH/MEDIUM/LOW/NOT SIGNIFICANT
+        - direction: "Risk Factor" / "Protective Factor" / "Neutral"
+    """
+    results = logit_results.reset_index() if 'feature' not in logit_results.columns else logit_results.copy()
+
+    # Formatted OR with CI
+    if 'or_ci_lower' in results.columns and 'or_ci_upper' in results.columns:
+        results['or_formatted'] = results.apply(
+            lambda r: f"{r['odds_ratio']:.2f} [{r['or_ci_lower']:.2f}, {r['or_ci_upper']:.2f}]",
+            axis=1
+        )
+    else:
+        results['or_formatted'] = results['odds_ratio'].apply(lambda x: f"{x:.2f}")
+
+    # Significance stars
+    def get_stars(p):
+        if p < 0.001:
+            return '***'
+        elif p < 0.01:
+            return '**'
+        elif p < 0.05:
+            return '*'
+        return ''
+
+    results['significance'] = results['p_value'].apply(get_stars)
+
+    # Plain English interpretation
+    def interpret_or(row):
+        or_val = row['odds_ratio']
+        p_val = row['p_value']
+
+        if p_val >= significance_level:
+            return "No significant effect"
+
+        if pd.isna(or_val) or or_val <= 0:
+            return "Invalid"
+
+        if or_val > 100 or or_val < 0.01:
+            return "Extreme value - interpret with caution"
+
+        if abs(or_val - 1) < 0.05:
+            return "No practical effect"
+
+        if or_val > 1:
+            pct = (or_val - 1) * 100
+            if pct > 100:
+                return f"{or_val:.1f}x more likely to be flagged"
+            return f"{pct:.0f}% more likely to be flagged"
+        else:
+            pct = (1 - or_val) * 100
+            return f"{pct:.0f}% less likely to be flagged"
+
+    results['interpretation'] = results.apply(interpret_or, axis=1)
+
+    # Impact category based on OR magnitude
+    def categorize_impact(row):
+        if row['p_value'] >= significance_level:
+            return "NOT SIGNIFICANT"
+
+        or_val = row['odds_ratio']
+        if pd.isna(or_val) or or_val <= 0:
+            return "INVALID"
+
+        # Use max(OR, 1/OR) for symmetric interpretation
+        or_effect = max(or_val, 1/or_val) if or_val > 0 else 1
+
+        if or_effect >= 4.0:
+            return "HIGH"
+        elif or_effect >= 2.5:
+            return "MEDIUM"
+        elif or_effect >= 1.5:
+            return "LOW"
+        return "NEGLIGIBLE"
+
+    results['impact_category'] = results.apply(categorize_impact, axis=1)
+
+    # Direction classification
+    def classify_direction(row):
+        if row['p_value'] >= significance_level:
+            return "Neutral"
+        or_val = row['odds_ratio']
+        if pd.isna(or_val):
+            return "Unknown"
+        if or_val > 1.05:
+            return "Risk Factor"
+        elif or_val < 0.95:
+            return "Protective Factor"
+        return "Neutral"
+
+    results['direction'] = results.apply(classify_direction, axis=1)
+
+    # Select and reorder columns
+    output_cols = [
+        'feature', 'odds_ratio', 'or_formatted', 'interpretation',
+        'p_value', 'significance', 'impact_category', 'direction'
+    ]
+    available_cols = [c for c in output_cols if c in results.columns]
+
+    return results[available_cols].sort_values('odds_ratio', key=lambda x: abs(np.log(x)), ascending=False)
+
+
+def generate_testing_executive_summary(
+    combined_results: pd.DataFrame,
+    significance_level: float = 0.05,
+) -> str:
+    """
+    Generate executive summary of statistical testing results.
+
+    Parameters
+    ----------
+    combined_results : pd.DataFrame
+        Output from run_combined_regression_tests()
+    significance_level : float
+        Threshold for significance
+
+    Returns
+    -------
+    str
+        Formatted executive summary
+    """
+    results = combined_results.reset_index() if combined_results.index.name else combined_results.copy()
+
+    summary_parts = []
+
+    # Header
+    summary_parts.append("=" * 70)
+    summary_parts.append("EXECUTIVE SUMMARY: Statistical Testing Results")
+    summary_parts.append("=" * 70)
+
+    # Overview
+    n_features = len(results)
+    n_sig_ols = (results['ols_significant'] == True).sum() if 'ols_significant' in results.columns else 0
+    n_sig_logit = (results['logit_significant'] == True).sum() if 'logit_significant' in results.columns else 0
+    n_sig_both = (results['significant_both'] == True).sum() if 'significant_both' in results.columns else 0
+
+    summary_parts.append(f"\nOVERVIEW:")
+    summary_parts.append(f"  Total features tested: {n_features}")
+    summary_parts.append(f"  Significant in OLS: {n_sig_ols} ({n_sig_ols/n_features*100:.1f}%)")
+    summary_parts.append(f"  Significant in Logistic: {n_sig_logit} ({n_sig_logit/n_features*100:.1f}%)")
+    summary_parts.append(f"  Significant in BOTH (high confidence): {n_sig_both}")
+
+    # Top Risk Factors
+    summary_parts.append("\n" + "-" * 50)
+    summary_parts.append("TOP 5 RISK FACTORS (Increase Likelihood of Flagging)")
+    summary_parts.append("-" * 50)
+
+    if 'logit_odds_ratio' in results.columns and 'logit_significant' in results.columns:
+        sig_results = results[results['logit_significant'] == True]
+        top_risk = sig_results[sig_results['logit_odds_ratio'] > 1].nlargest(5, 'logit_odds_ratio')
+
+        for i, (_, row) in enumerate(top_risk.iterrows(), 1):
+            or_val = row['logit_odds_ratio']
+            pct = (or_val - 1) * 100
+            feature = row['feature'] if 'feature' in row else row.name
+            summary_parts.append(
+                f"  {i}. {feature}: {pct:.0f}% more likely (OR={or_val:.2f}, p={row['logit_p_value']:.4f})"
+            )
+
+    # Top Protective Factors
+    summary_parts.append("\n" + "-" * 50)
+    summary_parts.append("TOP 5 PROTECTIVE FACTORS (Decrease Likelihood)")
+    summary_parts.append("-" * 50)
+
+    if 'logit_odds_ratio' in results.columns and 'logit_significant' in results.columns:
+        sig_results = results[results['logit_significant'] == True]
+        top_protective = sig_results[sig_results['logit_odds_ratio'] < 1].nsmallest(5, 'logit_odds_ratio')
+
+        for i, (_, row) in enumerate(top_protective.iterrows(), 1):
+            or_val = row['logit_odds_ratio']
+            pct = (1 - or_val) * 100
+            feature = row['feature'] if 'feature' in row else row.name
+            summary_parts.append(
+                f"  {i}. {feature}: {pct:.0f}% less likely (OR={or_val:.2f}, p={row['logit_p_value']:.4f})"
+            )
+
+    # Key Takeaways
+    summary_parts.append("\n" + "-" * 50)
+    summary_parts.append("KEY TAKEAWAYS")
+    summary_parts.append("-" * 50)
+
+    if n_sig_both > 0:
+        summary_parts.append(f"  - {n_sig_both} features show consistent effects across both models")
+        summary_parts.append("  - These high-confidence features should be prioritized for intervention")
+
+    if 'logit_odds_ratio' in results.columns:
+        high_impact = results[
+            (results.get('logit_significant', False) == True) &
+            ((results['logit_odds_ratio'] >= 2.0) | (results['logit_odds_ratio'] <= 0.5))
+        ]
+        if len(high_impact) > 0:
+            summary_parts.append(f"  - {len(high_impact)} features have HIGH practical impact (OR >= 2.0 or <= 0.5)")
+
+    summary_parts.append("\n" + "=" * 70)
+
+    return "\n".join(summary_parts)

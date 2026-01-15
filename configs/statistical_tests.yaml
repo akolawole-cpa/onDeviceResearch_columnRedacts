@@ -467,3 +467,65 @@ feature_sets:
 
 #   experimental:
 #     - exposure
+
+# =============================================================================
+# FEATURE REMOVAL CONFIGURATION
+# =============================================================================
+# Features to remove before modelling due to known collinearity issues
+
+feature_removal:
+  # Features that cause perfect multicollinearity (must remove)
+  collinear_features:
+    - is_weekend        # Redundant: = is_saturday + is_sunday
+    - is_business_hour  # Redundant: combination of weekday/weekend versions
+
+  # Additional features to exclude from modelling (domain knowledge)
+  exclude_from_modelling: []
+
+# =============================================================================
+# EFFECT SIZE THRESHOLDS
+# =============================================================================
+# Used for interpreting practical significance of results
+
+effect_size_thresholds:
+  # Cohen's d thresholds for OLS regression (continuous outcome)
+  # Reference: Cohen (1988) "Statistical Power Analysis"
+  cohens_d:
+    negligible: 0.2   # |d| < 0.2
+    small: 0.5        # 0.2 <= |d| < 0.5
+    medium: 0.8       # 0.5 <= |d| < 0.8
+    large: 0.8        # |d| >= 0.8
+
+  # Odds Ratio thresholds for logistic regression
+  # Reference: Chen et al. (2010) "A unified approach to interpreting model predictions"
+  # Thresholds use max(OR, 1/OR) for symmetric interpretation
+  odds_ratio:
+    negligible: 1.5   # 0.67 < OR < 1.5
+    small: 2.5        # 0.4 < OR <= 0.67 or 1.5 <= OR < 2.5
+    medium: 4.0       # 0.25 < OR <= 0.4 or 2.5 <= OR < 4.0
+    large: 4.0        # OR <= 0.25 or OR >= 4.0
+
+# =============================================================================
+# INTERPRETATION GUIDE FOR STAKEHOLDERS
+# =============================================================================
+#
+# OLS COEFFICIENTS (ols_mean_difference):
+#   - Positive coefficient: Feature INCREASES wonky_study_count
+#   - Negative coefficient: Feature DECREASES wonky_study_count
+#   - Example: coef = +0.5 means "respondents with this feature have 0.5 more
+#     wonky studies on average compared to those without"
+#
+# ODDS RATIOS (logit_odds_ratio):
+#   - OR > 1: Feature INCREASES likelihood of being flagged
+#   - OR < 1: Feature DECREASES likelihood of being flagged
+#   - OR = 1: No effect
+#   - Example: OR = 2.0 means "respondents with this feature are 2x more likely
+#     to have any wonky studies"
+#   - Example: OR = 0.5 means "respondents with this feature are 50% less likely
+#     to have any wonky studies"
+#
+# P-VALUES:
+#   - p < 0.001 (***): Very strong evidence
+#   - p < 0.01 (**):   Strong evidence
+#   - p < 0.05 (*):    Moderate evidence
+#   - p >= 0.05:       Insufficient evidence (not significant)

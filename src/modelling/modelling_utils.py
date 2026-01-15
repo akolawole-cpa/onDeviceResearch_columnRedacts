@@ -2,23 +2,35 @@
 Modelling Utilities Module
 
 Helper functions for modelling including:
-- Feature preprocessing (collinearity removal)
-- SHAP analysis
-- Stakeholder reporting
-- Visualization helpers
+- Feature preprocessing (collinearity removal, VIF analysis)
+- SHAP analysis and feature interactions
+- Stakeholder reporting and executive summaries
+- Model comparison scorecard
+- Calibration analysis
 
 Usage:
     from modelling.modelling_utils import (
         remove_collinear_features,
+        calculate_vif_detailed,
         run_shap_analysis,
+        analyze_feature_interactions,
         create_stakeholder_report,
+        create_model_scorecard,
+        analyze_logistic_calibration,
+        generate_modelling_executive_summary,
         print_model_summary,
+        get_significant_features,
+        export_results,
+        plot_shap_summary,
+        plot_shap_bar,
+        plot_shap_dependence,
     )
 """
 
 import pandas as pd
 import numpy as np
 import shap
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 from typing import Dict, List, Tuple, Any, Optional
 
 import warnings
@@ -736,23 +748,561 @@ def export_results(
 ) -> pd.DataFrame:
     """
     Export results to CSV for further analysis.
-    
+
     Returns the export DataFrame.
     """
     comp = results['comparison'].copy()
-    
-    export_cols = ['feature', 'linear_coef', 'linear_p_value', 
+
+    export_cols = ['feature', 'linear_coef', 'linear_p_value',
                    'rf_importance', 'rf_importance_pct', 'avg_rank', 'VIF']
-    
+
     if 'lr_coefficient' in comp.columns:
         export_cols.extend(['lr_coefficient', 'lr_odds_ratio', 'lr_p_value'])
-    
+
     if 'shap_importance' in comp.columns:
         export_cols.extend(['shap_importance', 'shap_mean', 'shap_direction'])
-    
+
     export_df = comp[export_cols].copy()
     export_df.to_csv(output_path, index=False)
-    
+
     print(f"✓ Results exported to {output_path}")
-    
+
     return export_df
+
+
+# =============================================================================
+# FEATURE INTERACTION ANALYSIS
+# =============================================================================
+
+def analyze_feature_interactions(
+    results: Dict,
+    df: pd.DataFrame,
+    top_n: int = 10,
+    sample_size: int = 500,
+) -> pd.DataFrame:
+    """
+    Analyze feature interactions using SHAP interaction values.
+
+    SHAP interaction values show how pairs of features work together
+    to affect predictions. High interaction means the effect of one
+    feature depends on another feature's value.
+
+    Parameters:
+    -----------
+    results : Dict
+        Output from run_all_models() with SHAP analysis completed
+    df : pd.DataFrame
+        DataFrame with features
+    top_n : int
+        Number of top interactions to return
+    sample_size : int
+        Sample size for interaction calculation (can be slow)
+
+    Returns:
+    --------
+    pd.DataFrame
+        Top feature interactions with strength
+    """
+    print("\n" + "="*70)
+    print("FEATURE INTERACTION ANALYSIS")
+    print("="*70)
+
+    if 'rf_model' not in results:
+        print("Run run_all_models() first")
+        return pd.DataFrame()
+
+    rf_model = results['rf_model']
+    feature_cols = results['feature_cols']
+
+    # Prepare data
+    X = df[feature_cols].copy()
+    mask = X.notna().all(axis=1)
+    X = X[mask].reset_index(drop=True)
+
+    # Sample for speed
+    if len(X) > sample_size:
+        X_sample = X.sample(n=sample_size, random_state=42)
+        print(f"Using {sample_size} samples for interaction analysis")
+    else:
+        X_sample = X
+
+    # Calculate SHAP interaction values
+    print("Calculating SHAP interaction values (this may take a moment)...")
+    explainer = shap.TreeExplainer(rf_model)
+
+    try:
+        shap_interaction = explainer.shap_interaction_values(X_sample)
+        print("Done!")
+    except Exception as e:
+        print(f"Interaction analysis failed: {e}")
+        return pd.DataFrame()
+
+    # Extract interaction strengths
+    n_features = len(feature_cols)
+    interactions = []
+
+    for i in range(n_features):
+        for j in range(i + 1, n_features):
+            # Mean absolute interaction
+            interaction_strength = np.abs(shap_interaction[:, i, j]).mean()
+            interactions.append({
+                'feature_1': feature_cols[i],
+                'feature_2': feature_cols[j],
+                'interaction_strength': interaction_strength,
+            })
+
+    interaction_df = pd.DataFrame(interactions)
+    interaction_df = interaction_df.sort_values('interaction_strength', ascending=False)
+    interaction_df['rank'] = range(1, len(interaction_df) + 1)
+
+    # Add interpretation
+    max_strength = interaction_df['interaction_strength'].max()
+    interaction_df['relative_strength'] = (
+        interaction_df['interaction_strength'] / max_strength * 100
+    ).round(1)
+    interaction_df['interpretation'] = interaction_df['relative_strength'].apply(
+        lambda x: 'Strong' if x > 50 else ('Moderate' if x > 20 else 'Weak')
+    )
+
+    print(f"\nTop {top_n} Feature Interactions:")
+    print(interaction_df.head(top_n)[
+        ['feature_1', 'feature_2', 'interaction_strength', 'interpretation']
+    ].to_string(index=False))
+
+    # Store in results
+    results['shap_interactions'] = interaction_df
+    results['shap_interaction_values'] = shap_interaction
+
+    return interaction_df.head(top_n)
+
+
+# =============================================================================
+# MODEL SCORECARD
+# =============================================================================
+
+def create_model_scorecard(results: Dict) -> pd.DataFrame:
+    """
+    Create a unified scorecard comparing all models.
+
+    This provides stakeholders with a quick comparison of model
+    performance, interpretability, and recommended use cases.
+
+    Parameters:
+    -----------
+    results : Dict
+        Output from run_all_models()
+
+    Returns:
+    --------
+    pd.DataFrame
+        Model comparison scorecard
+    """
+    print("\n" + "="*70)
+    print("MODEL SCORECARD")
+    print("="*70)
+
+    scorecard = []
+
+    # Linear Regression
+    if 'linear_model' in results:
+        lm = results['linear_model']
+        n_significant = (results['linear_importance']['p_value'] < 0.05).sum()
+        n_features = len(results['linear_importance'])
+
+        scorecard.append({
+            'Model': 'Linear Regression (OLS)',
+            'Primary Metric': f"R² = {lm.rsquared:.3f}",
+            'Secondary Metric': f"Adj R² = {lm.rsquared_adj:.3f}",
+            'Significant Features': f"{n_significant}/{n_features}",
+            'Interpretability': 'High',
+            'Best For': 'Effect direction & magnitude',
+            'Handles Non-Linear': 'No',
+        })
+
+    # Random Forest
+    if 'rf_cv_results' in results:
+        rf_cv = results['rf_cv_results']
+        cv_mean = np.mean(rf_cv['test_r2'])
+        cv_std = np.std(rf_cv['test_r2'])
+        rmse = np.sqrt(np.mean(rf_cv['test_mse']))
+
+        scorecard.append({
+            'Model': 'Random Forest',
+            'Primary Metric': f"CV R² = {cv_mean:.3f} ± {cv_std:.3f}",
+            'Secondary Metric': f"RMSE = {rmse:.3f}",
+            'Significant Features': 'N/A (uses importance)',
+            'Interpretability': 'Medium (SHAP)',
+            'Best For': 'Non-linear patterns',
+            'Handles Non-Linear': 'Yes',
+        })
+
+    # Logistic Regression
+    if 'lr_cv_results' in results:
+        lr_cv = results['lr_cv_results']
+        acc_mean = np.mean(lr_cv['accuracy'])
+        acc_std = np.std(lr_cv['accuracy'])
+        auc_mean = np.nanmean(lr_cv['auc'])
+        auc_std = np.nanstd(lr_cv['auc'])
+        n_significant = results['lr_importance']['lr_significant'].sum() if 'lr_importance' in results else 'N/A'
+
+        scorecard.append({
+            'Model': 'Logistic Regression',
+            'Primary Metric': f"AUC = {auc_mean:.3f} ± {auc_std:.3f}",
+            'Secondary Metric': f"Accuracy = {acc_mean:.3f} ± {acc_std:.3f}",
+            'Significant Features': str(n_significant),
+            'Interpretability': 'High (odds ratios)',
+            'Best For': 'Risk factors (binary)',
+            'Handles Non-Linear': 'No',
+        })
+
+    scorecard_df = pd.DataFrame(scorecard)
+
+    # Print formatted scorecard
+    print("\n" + scorecard_df.to_string(index=False))
+
+    # Add recommendations
+    print("\n" + "-"*70)
+    print("RECOMMENDATIONS:")
+    print("-"*70)
+
+    if 'linear_model' in results and 'rf_cv_results' in results:
+        linear_r2 = results['linear_model'].rsquared
+        rf_r2 = np.mean(results['rf_cv_results']['test_r2'])
+
+        if rf_r2 > linear_r2 + 0.05:
+            print("  Random Forest outperforms Linear by >5% R²")
+            print("  → Non-linear relationships likely exist in your data")
+        elif linear_r2 > rf_r2:
+            print("  Linear performs as well as Random Forest")
+            print("  → Prefer Linear for interpretability")
+        else:
+            print("  Models perform similarly")
+            print("  → Use Linear for interpretability, RF for prediction")
+
+    if 'lr_cv_results' in results:
+        auc = np.nanmean(results['lr_cv_results']['auc'])
+        if auc >= 0.8:
+            print(f"  Logistic Regression AUC = {auc:.3f} (Good discrimination)")
+        elif auc >= 0.7:
+            print(f"  Logistic Regression AUC = {auc:.3f} (Acceptable)")
+        else:
+            print(f"  Logistic Regression AUC = {auc:.3f} (Poor - consider other models)")
+
+    return scorecard_df
+
+
+# =============================================================================
+# CALIBRATION ANALYSIS
+# =============================================================================
+
+def analyze_logistic_calibration(
+    results: Dict,
+    df: pd.DataFrame,
+    n_bins: int = 10,
+) -> Tuple[pd.DataFrame, Any]:
+    """
+    Analyze calibration of logistic regression predictions.
+
+    Calibration shows whether predicted probabilities match actual
+    frequencies. A well-calibrated model predicting 30% probability
+    should be correct ~30% of the time.
+
+    Parameters:
+    -----------
+    results : Dict
+        Output from run_all_models()
+    df : pd.DataFrame
+        DataFrame with features and outcome
+    n_bins : int
+        Number of bins for calibration analysis
+
+    Returns:
+    --------
+    Tuple of (calibration_df, plotly_figure)
+    """
+    import plotly.graph_objects as go
+
+    print("\n" + "="*70)
+    print("LOGISTIC REGRESSION CALIBRATION")
+    print("="*70)
+
+    if 'lr_model' not in results:
+        print("No logistic regression model found")
+        return pd.DataFrame(), None
+
+    lr_model = results['lr_model']
+    feature_cols = results['feature_cols']
+
+    # Prepare data
+    X = df[feature_cols].copy()
+    y_raw = df['wonky_study_count'].copy()
+    y = (y_raw.fillna(0) > 0).astype(int)
+
+    # Handle missing values
+    mask = X.notna().all(axis=1) & y.notna()
+    X = X[mask].reset_index(drop=True)
+    y = y[mask].reset_index(drop=True)
+
+    # Scale features
+    if hasattr(lr_model, 'scaler_'):
+        X_scaled = pd.DataFrame(
+            lr_model.scaler_.transform(X),
+            columns=feature_cols
+        )
+    else:
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
+        X_scaled = pd.DataFrame(scaler.fit_transform(X), columns=feature_cols)
+
+    # Get predicted probabilities
+    y_prob = lr_model.predict_proba(X_scaled)[:, 1]
+
+    # Create calibration bins
+    calibration_data = pd.DataFrame({
+        'y_true': y,
+        'y_prob': y_prob,
+    })
+
+    calibration_data['bin'] = pd.cut(
+        calibration_data['y_prob'],
+        bins=n_bins,
+        labels=False
+    )
+
+    # Calculate bin statistics
+    calibration_stats = calibration_data.groupby('bin').agg({
+        'y_prob': ['mean', 'count'],
+        'y_true': 'mean',
+    }).reset_index()
+
+    calibration_stats.columns = ['bin', 'mean_predicted', 'n_samples', 'actual_rate']
+
+    # Calculate calibration error
+    calibration_stats['calibration_error'] = (
+        calibration_stats['actual_rate'] - calibration_stats['mean_predicted']
+    ).abs()
+
+    # Overall metrics
+    mean_calibration_error = calibration_stats['calibration_error'].mean()
+    max_calibration_error = calibration_stats['calibration_error'].max()
+
+    print(f"\nCalibration Summary:")
+    print(f"  Mean Calibration Error: {mean_calibration_error:.4f}")
+    print(f"  Max Calibration Error:  {max_calibration_error:.4f}")
+
+    if mean_calibration_error < 0.05:
+        print("  Well-calibrated (error < 5%)")
+    elif mean_calibration_error < 0.10:
+        print("  Acceptably calibrated (error < 10%)")
+    else:
+        print("  Poorly calibrated - predictions may be overconfident")
+
+    # Create Plotly calibration plot
+    fig = go.Figure()
+
+    # Perfect calibration line
+    fig.add_trace(go.Scatter(
+        x=[0, 1],
+        y=[0, 1],
+        mode='lines',
+        name='Perfect Calibration',
+        line=dict(dash='dash', color='gray'),
+    ))
+
+    # Actual calibration
+    fig.add_trace(go.Scatter(
+        x=calibration_stats['mean_predicted'],
+        y=calibration_stats['actual_rate'],
+        mode='lines+markers',
+        name='Model Calibration',
+        marker=dict(size=10),
+        line=dict(color='blue'),
+        hovertemplate=(
+            'Predicted: %{x:.2%}<br>'
+            'Actual: %{y:.2%}<br>'
+            '<extra></extra>'
+        ),
+    ))
+
+    fig.update_layout(
+        title='Logistic Regression Calibration Plot',
+        xaxis_title='Mean Predicted Probability',
+        yaxis_title='Actual Positive Rate',
+        xaxis=dict(range=[0, 1]),
+        yaxis=dict(range=[0, 1]),
+        showlegend=True,
+        height=500,
+        width=600,
+    )
+
+    # Add annotation
+    fig.add_annotation(
+        x=0.95,
+        y=0.05,
+        text=f"Mean Error: {mean_calibration_error:.3f}",
+        showarrow=False,
+        xanchor='right',
+    )
+
+    # Store results
+    results['calibration_data'] = calibration_stats
+    results['calibration_error'] = mean_calibration_error
+
+    return calibration_stats, fig
+
+
+# =============================================================================
+# EXECUTIVE SUMMARY
+# =============================================================================
+
+def generate_modelling_executive_summary(
+    results: Dict,
+    outcome_description: str = "wonkiness",
+) -> str:
+    """
+    Generate a comprehensive executive summary for stakeholders.
+
+    This provides a narrative summary of modelling results including
+    key predictors, risk factors, and model recommendations.
+
+    Parameters:
+    -----------
+    results : Dict
+        Output from run_all_models()
+    outcome_description : str
+        Description of the outcome variable for narrative
+
+    Returns:
+    --------
+    str
+        Formatted executive summary
+    """
+    lines = []
+    lines.append("="*80)
+    lines.append("EXECUTIVE SUMMARY: PREDICTIVE MODELLING RESULTS")
+    lines.append("="*80)
+
+    # Model Performance Summary
+    lines.append("\n1. MODEL PERFORMANCE")
+    lines.append("-"*40)
+
+    if 'linear_model' in results:
+        lm = results['linear_model']
+        lines.append(f"   Linear Regression:  R² = {lm.rsquared:.3f}")
+        lines.append(f"      Explains {lm.rsquared*100:.1f}% of variance in {outcome_description}")
+
+    if 'rf_cv_results' in results:
+        rf_cv = results['rf_cv_results']
+        rf_r2 = np.mean(rf_cv['test_r2'])
+        rf_std = np.std(rf_cv['test_r2'])
+        lines.append(f"   Random Forest:      R² = {rf_r2:.3f} ± {rf_std:.3f}")
+
+    if 'lr_cv_results' in results:
+        lr_cv = results['lr_cv_results']
+        auc = np.nanmean(lr_cv['auc'])
+        lines.append(f"   Logistic Regression: AUC = {auc:.3f}")
+        if auc >= 0.8:
+            lines.append("      (Good ability to distinguish wonky vs non-wonky)")
+        elif auc >= 0.7:
+            lines.append("      (Acceptable discrimination)")
+
+    # Top Predictors
+    lines.append("\n2. TOP PREDICTIVE FACTORS")
+    lines.append("-"*40)
+
+    comp = results['comparison']
+    for i, (_, row) in enumerate(comp.head(5).iterrows(), 1):
+        feat = row['feature']
+        direction = ""
+        if 'shap_direction' in row and pd.notna(row['shap_direction']):
+            direction = f" ({row['shap_direction']} {outcome_description})"
+        elif 'linear_coef' in row:
+            direction = f" ({'increases' if row['linear_coef'] > 0 else 'decreases'} {outcome_description})"
+        lines.append(f"   {i}. {feat}{direction}")
+
+    # Risk Factors vs Protective Factors
+    if 'shap_importance' in results:
+        shap_df = results['shap_importance']
+
+        lines.append("\n3. RISK FACTORS (increase " + outcome_description + ")")
+        lines.append("-"*40)
+        risk_factors = shap_df[shap_df['shap_mean'] > 0.001].head(5)
+        if len(risk_factors) > 0:
+            for _, row in risk_factors.iterrows():
+                lines.append(f"   {row['feature']}: +{row['shap_mean']:.4f}")
+        else:
+            lines.append("   No clear risk factors identified")
+
+        lines.append("\n4. PROTECTIVE FACTORS (decrease " + outcome_description + ")")
+        lines.append("-"*40)
+        protective = shap_df[shap_df['shap_mean'] < -0.001].head(5)
+        if len(protective) > 0:
+            for _, row in protective.iterrows():
+                lines.append(f"   {row['feature']}: {row['shap_mean']:.4f}")
+        else:
+            lines.append("   No clear protective factors identified")
+
+    # Odds Ratios (if logistic regression)
+    if 'lr_importance' in results:
+        lr_df = results['lr_importance'].copy()
+        valid_or = lr_df[(lr_df['lr_odds_ratio'] >= 0.1) & (lr_df['lr_odds_ratio'] <= 10)]
+
+        if len(valid_or) > 0:
+            lines.append("\n5. ODDS RATIOS (Logistic Regression)")
+            lines.append("-"*40)
+
+            # Highest risk
+            high_risk = valid_or[valid_or['lr_odds_ratio'] > 1.2].nlargest(3, 'lr_odds_ratio')
+            if len(high_risk) > 0:
+                lines.append("   Highest Risk:")
+                for _, row in high_risk.iterrows():
+                    pct = (row['lr_odds_ratio'] - 1) * 100
+                    lines.append(f"      {row['feature']}: OR = {row['lr_odds_ratio']:.2f} ({pct:.0f}% more likely)")
+
+            # Lowest risk
+            low_risk = valid_or[valid_or['lr_odds_ratio'] < 0.8].nsmallest(3, 'lr_odds_ratio')
+            if len(low_risk) > 0:
+                lines.append("   Lowest Risk:")
+                for _, row in low_risk.iterrows():
+                    pct = (1 - row['lr_odds_ratio']) * 100
+                    lines.append(f"      {row['feature']}: OR = {row['lr_odds_ratio']:.2f} ({pct:.0f}% less likely)")
+
+    # Model Agreement
+    lines.append("\n6. MODEL AGREEMENT")
+    lines.append("-"*40)
+
+    if 'linear_rank' in comp.columns and 'rf_rank' in comp.columns:
+        # Check if top features agree across models
+        top_linear = set(comp.nsmallest(5, 'linear_rank')['feature'])
+        top_rf = set(comp.nsmallest(5, 'rf_rank')['feature'])
+        agreement = top_linear & top_rf
+
+        lines.append(f"   Features in top 5 for both Linear & RF: {len(agreement)}")
+        if agreement:
+            lines.append(f"      {', '.join(sorted(agreement))}")
+
+    # Key Takeaways
+    lines.append("\n7. KEY TAKEAWAYS")
+    lines.append("-"*40)
+
+    # Calculate some key insights
+    n_significant = (results['linear_importance']['p_value'] < 0.05).sum() if 'linear_importance' in results else 0
+    n_features = len(results['feature_cols'])
+
+    lines.append(f"   {n_significant} of {n_features} features significantly predict {outcome_description}")
+
+    if 'linear_model' in results:
+        r2 = results['linear_model'].rsquared
+        if r2 >= 0.5:
+            lines.append(f"   Strong explanatory power (R² = {r2:.2f})")
+        elif r2 >= 0.3:
+            lines.append(f"   Moderate explanatory power (R² = {r2:.2f})")
+        else:
+            lines.append(f"   Low explanatory power (R² = {r2:.2f}) - other factors may be involved")
+
+    lines.append("\n" + "="*80)
+
+    summary = "\n".join(lines)
+    print(summary)
+
+    return summary

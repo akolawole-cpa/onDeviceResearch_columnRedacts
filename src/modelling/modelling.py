@@ -9,7 +9,11 @@ Usage:
         build_linear_baseline,
         build_logistic_regression_model,
         build_random_forest_model,
+        build_ensemble_random_forest,
         run_all_models,
+        create_user_level_train_test_split,
+        evaluate_on_holdout,
+        EnsembleRandomForest,
     )
 """
 
@@ -425,6 +429,343 @@ def build_logistic_regression_model(
     lr_model.scaler_ = scaler
     
     return lr_model, importance_df, cv_scores
+
+
+# =============================================================================
+# HOLDOUT TEST SET & ENSEMBLE FUNCTIONS
+# =============================================================================
+
+def create_user_level_train_test_split(
+    df: pd.DataFrame,
+    user_id_var: str,
+    test_size: float = 0.2,
+    random_state: int = 42,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Split data by user to prevent data leakage.
+
+    Ensures no user appears in both train and test sets.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with user identifier
+    user_id_var : str
+        Column name for user identifier
+    test_size : float
+        Proportion of users to include in test set
+    random_state : int
+        Random seed for reproducibility
+
+    Returns:
+    --------
+    Tuple of (train_df, test_df)
+    """
+    np.random.seed(random_state)
+
+    unique_users = df[user_id_var].unique()
+    n_test_users = int(len(unique_users) * test_size)
+
+    # Randomly select test users
+    test_users = np.random.choice(unique_users, size=n_test_users, replace=False)
+
+    train_df = df[~df[user_id_var].isin(test_users)].reset_index(drop=True)
+    test_df = df[df[user_id_var].isin(test_users)].reset_index(drop=True)
+
+    print(f"Train/Test Split (by user):")
+    print(f"  Train: {len(train_df)} obs, {train_df[user_id_var].nunique()} users")
+    print(f"  Test:  {len(test_df)} obs, {test_df[user_id_var].nunique()} users")
+
+    return train_df, test_df
+
+
+def evaluate_on_holdout(
+    model: Any,
+    test_df: pd.DataFrame,
+    feature_cols: List[str],
+    outcome_var: str,
+    model_type: str = 'regression',
+    scaler: Optional[Any] = None,
+) -> Dict[str, float]:
+    """
+    Evaluate a trained model on holdout test set.
+
+    Parameters:
+    -----------
+    model : Any
+        Trained model with predict method
+    test_df : pd.DataFrame
+        Holdout test data
+    feature_cols : List[str]
+        Feature columns
+    outcome_var : str
+        Target variable
+    model_type : str
+        'regression' or 'classification'
+    scaler : Any, optional
+        Fitted scaler for logistic regression
+
+    Returns:
+    --------
+    Dict with performance metrics
+    """
+    X_test = test_df[feature_cols].copy()
+    y_test = test_df[outcome_var].copy()
+
+    # Handle missing values
+    mask = X_test.notna().all(axis=1) & y_test.notna()
+    X_test = X_test[mask].reset_index(drop=True)
+    y_test = y_test[mask].reset_index(drop=True)
+
+    # Scale if needed (for logistic regression)
+    if scaler is not None:
+        X_test = pd.DataFrame(scaler.transform(X_test), columns=feature_cols)
+
+    if model_type == 'regression':
+        y_pred = model.predict(X_test)
+
+        metrics = {
+            'holdout_r2': r2_score(y_test, y_pred),
+            'holdout_mse': mean_squared_error(y_test, y_pred),
+            'holdout_rmse': np.sqrt(mean_squared_error(y_test, y_pred)),
+            'holdout_mae': mean_absolute_error(y_test, y_pred),
+            'n_test': len(y_test),
+        }
+
+        print(f"Holdout Performance (Regression):")
+        print(f"  R²:   {metrics['holdout_r2']:.4f}")
+        print(f"  RMSE: {metrics['holdout_rmse']:.4f}")
+        print(f"  MAE:  {metrics['holdout_mae']:.4f}")
+
+    else:  # classification
+        y_test_binary = (y_test > 0).astype(int)
+        y_pred = model.predict(X_test)
+        y_prob = model.predict_proba(X_test)[:, 1] if hasattr(model, 'predict_proba') else None
+
+        metrics = {
+            'holdout_accuracy': accuracy_score(y_test_binary, y_pred),
+            'holdout_precision': precision_score(y_test_binary, y_pred, zero_division=0),
+            'holdout_recall': recall_score(y_test_binary, y_pred, zero_division=0),
+            'holdout_f1': f1_score(y_test_binary, y_pred, zero_division=0),
+            'n_test': len(y_test),
+        }
+
+        if y_prob is not None:
+            try:
+                metrics['holdout_auc'] = roc_auc_score(y_test_binary, y_prob)
+            except:
+                metrics['holdout_auc'] = np.nan
+
+        print(f"Holdout Performance (Classification):")
+        print(f"  Accuracy:  {metrics['holdout_accuracy']:.4f}")
+        print(f"  Precision: {metrics['holdout_precision']:.4f}")
+        print(f"  Recall:    {metrics['holdout_recall']:.4f}")
+        print(f"  F1:        {metrics['holdout_f1']:.4f}")
+        if 'holdout_auc' in metrics:
+            print(f"  AUC:       {metrics['holdout_auc']:.4f}")
+
+    return metrics
+
+
+class EnsembleRandomForest:
+    """
+    Ensemble of Random Forest models from cross-validation folds.
+
+    Averages predictions across all fold models for more stable,
+    robust predictions than using a single best-fold model.
+
+    Attributes:
+    -----------
+    models : List
+        List of fitted RF models from each fold
+    feature_cols : List[str]
+        Feature column names
+    feature_importances_ : np.ndarray
+        Averaged feature importances across all models
+    """
+
+    def __init__(self, models: List, feature_cols: List[str]):
+        """Initialize with list of trained models."""
+        self.models = models
+        self.feature_cols = feature_cols
+
+        # Average feature importances
+        importances = np.array([m.feature_importances_ for m in models])
+        self.feature_importances_ = importances.mean(axis=0)
+        self.feature_importances_std_ = importances.std(axis=0)
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Predict by averaging predictions from all fold models.
+
+        Parameters:
+        -----------
+        X : pd.DataFrame
+            Features to predict on
+
+        Returns:
+        --------
+        np.ndarray of averaged predictions
+        """
+        predictions = np.array([m.predict(X) for m in self.models])
+        return predictions.mean(axis=0)
+
+    def predict_with_uncertainty(self, X: pd.DataFrame) -> Dict[str, np.ndarray]:
+        """
+        Predict with uncertainty estimates from model disagreement.
+
+        Parameters:
+        -----------
+        X : pd.DataFrame
+            Features to predict on
+
+        Returns:
+        --------
+        Dict with 'mean', 'std', 'lower', 'upper' predictions
+        """
+        predictions = np.array([m.predict(X) for m in self.models])
+        mean_pred = predictions.mean(axis=0)
+        std_pred = predictions.std(axis=0)
+
+        return {
+            'mean': mean_pred,
+            'std': std_pred,
+            'lower': mean_pred - 1.96 * std_pred,  # 95% CI
+            'upper': mean_pred + 1.96 * std_pred,
+        }
+
+    def get_feature_importance_df(self) -> pd.DataFrame:
+        """Get feature importances with uncertainty."""
+        return pd.DataFrame({
+            'feature': self.feature_cols,
+            'importance': self.feature_importances_,
+            'importance_std': self.feature_importances_std_,
+            'importance_pct': (self.feature_importances_ * 100).round(2),
+        }).sort_values('importance', ascending=False)
+
+
+def build_ensemble_random_forest(
+    df: pd.DataFrame,
+    feature_cols: List[str],
+    outcome_var: str,
+    user_id_var: str,
+    n_estimators: int = 100,
+    max_depth: int = 10,
+    n_splits: int = 5,
+) -> Tuple[EnsembleRandomForest, pd.DataFrame, Dict[str, List[float]]]:
+    """
+    Build an ensemble Random Forest using all CV fold models.
+
+    Unlike build_random_forest_model which returns the best fold model,
+    this returns an EnsembleRandomForest that averages predictions
+    from all fold models for more stable predictions.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with features and outcome
+    feature_cols : List[str]
+        List of feature column names
+    outcome_var : str
+        Target variable name
+    user_id_var : str
+        User identifier for GroupKFold
+    n_estimators : int
+        Number of trees per model
+    max_depth : int
+        Maximum tree depth
+    n_splits : int
+        Number of CV folds
+
+    Returns:
+    --------
+    Tuple of (ensemble_model, importance_df, cv_scores)
+    """
+    print("\n" + "="*70)
+    print("ENSEMBLE RANDOM FOREST")
+    print("="*70)
+
+    X = df[feature_cols].copy()
+    y = df[outcome_var].copy()
+    groups = df[user_id_var].copy()
+
+    # Handle missing values
+    mask = X.notna().all(axis=1) & y.notna() & groups.notna()
+    X = X[mask].reset_index(drop=True)
+    y = y[mask].reset_index(drop=True)
+    groups = groups[mask].reset_index(drop=True)
+
+    print(f"\nObservations: {len(y)}")
+    print(f"Unique users: {groups.nunique()}")
+    print(f"Features: {len(feature_cols)}")
+
+    # Cross-validation
+    print(f"\nTraining {n_splits} models (one per fold)...")
+    gkf = GroupKFold(n_splits=n_splits)
+
+    cv_scores = {
+        'train_r2': [], 'test_r2': [],
+        'test_mse': [], 'test_mae': []
+    }
+    fold_models = []
+
+    for fold, (train_idx, test_idx) in enumerate(gkf.split(X, y, groups), 1):
+        X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+
+        rf_fold = RandomForestRegressor(
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            min_samples_split=20,
+            min_samples_leaf=10,
+            random_state=42 + fold,  # Different seed per fold for diversity
+            n_jobs=-1
+        )
+        rf_fold.fit(X_train, y_train)
+        fold_models.append(rf_fold)
+
+        # Calculate metrics
+        train_r2 = r2_score(y_train, rf_fold.predict(X_train))
+        test_r2 = r2_score(y_test, rf_fold.predict(X_test))
+        test_mse = mean_squared_error(y_test, rf_fold.predict(X_test))
+        test_mae = mean_absolute_error(y_test, rf_fold.predict(X_test))
+
+        cv_scores['train_r2'].append(train_r2)
+        cv_scores['test_r2'].append(test_r2)
+        cv_scores['test_mse'].append(test_mse)
+        cv_scores['test_mae'].append(test_mae)
+
+        print(f"  Fold {fold}: Test R²={test_r2:.4f}, Train R²={train_r2:.4f}")
+
+    # Create ensemble
+    ensemble = EnsembleRandomForest(fold_models, feature_cols)
+
+    # Summary
+    print(f"\nCV Summary:")
+    print(f"  Test R²: {np.mean(cv_scores['test_r2']):.4f} ± {np.std(cv_scores['test_r2']):.4f}")
+    print(f"  Test RMSE: {np.sqrt(np.mean(cv_scores['test_mse'])):.4f}")
+    print(f"  Test MAE: {np.mean(cv_scores['test_mae']):.4f}")
+    print(f"\n✓ Ensemble created with {len(fold_models)} models")
+
+    # Overfitting check
+    overfit_gap = np.mean(cv_scores['train_r2']) - np.mean(cv_scores['test_r2'])
+    if overfit_gap > 0.1:
+        print(f"  ⚠️ Possible overfitting (gap = {overfit_gap:.4f})")
+    else:
+        print(f"  ✓ Overfitting check OK (gap = {overfit_gap:.4f})")
+
+    # Get feature importance from ensemble
+    importance_df = ensemble.get_feature_importance_df()
+    importance_df = importance_df.rename(columns={
+        'importance': 'rf_importance',
+        'importance_std': 'rf_importance_std',
+        'importance_pct': 'rf_importance_pct',
+    })
+
+    print("\nTop 10 Features (by ensemble importance):")
+    print(importance_df.head(10)[['feature', 'rf_importance_pct', 'rf_importance_std']].to_string(index=False))
+
+    return ensemble, importance_df, cv_scores
 
 
 # =============================================================================
