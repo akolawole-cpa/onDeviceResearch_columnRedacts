@@ -3,52 +3,72 @@ Data Joiners Module
 
 Functions for joining multiple Spark DataFrames.
 """
-import numpy as np
-import pandas as pd
 
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import col
-from typing import Optional
+from typing import Optional, List
+import pandas as pd
 
 
 def join_user_task_respondent(
     user_df: DataFrame,
     task_complete_df: DataFrame,
     respondent_info_df: DataFrame,
+    ditr_df: Optional[DataFrame] = None,
     join_type: str = "inner"
 ) -> DataFrame:
     """
-    Join user, task_complete, and respondent_info tables.
+    Join user, task_complete, respondent_info, and optionally DITR tables.
     
-    Parameters:
-    -----------
+    This creates a task-level dataset with user demographics, profile info,
+    and optionally device/hardware information.
+    
+    Parameters
+    ----------
     user_df : DataFrame
-        User DataFrame
+        User DataFrame (from load_user_table)
     task_complete_df : DataFrame
-        Task complete DataFrame
+        Task complete DataFrame (from load_task_complete_table)
     respondent_info_df : DataFrame
-        Respondent info DataFrame
+        Respondent info DataFrame (from load_respondent_info_table)
+    ditr_df : DataFrame, optional
+        Device info DataFrame (from load_ditr_table). If provided, joins
+        hardware, manufacturer, OS, and app_version columns.
     join_type : str
         Type of join (default: "inner")
         
-    Returns:
-    --------
+    Returns
+    -------
     DataFrame
-        Joined DataFrame
+        Joined DataFrame at task-completion level
     """
-    # user & task_complete
+    # User -> Task Complete
     joined = user_df.join(
         task_complete_df,
         user_df.respondent_pk == task_complete_df.respondentPk,
         join_type
     )
     
-    # respondent info & user
+    # -> Respondent Info (drop duplicate respondent_pk after join)
     joined = joined.join(
         respondent_info_df,
         user_df.respondent_pk == respondent_info_df.respondent_pk,
         join_type
-    )
+    ).drop(respondent_info_df.respondent_pk)
+    
+    # -> DITR (device info)
+    if ditr_df is not None:
+        ditr_cols_to_rename = ['date_created', 'respondent_pk', 'hardware',
+                               'manufacturer', 'os']
+        for col_name in ditr_cols_to_rename:
+            if col_name in ditr_df.columns:
+                ditr_df = ditr_df.withColumnRenamed(col_name, f"ditr_{col_name}")
+        
+        joined = joined.join(
+            ditr_df,
+            user_df.respondent_pk == ditr_df.ditr_respondent_pk,
+            "left"
+        )
     
     return joined
 
@@ -63,8 +83,8 @@ def join_wonky_balance_with_task(
     """
     Join wonky study balance table with task table.
     
-    Parameters:
-    -----------
+    Parameters
+    ----------
     balance_df : DataFrame
         Balance DataFrame from wonky study
     task_df : DataFrame
@@ -76,141 +96,147 @@ def join_wonky_balance_with_task(
     join_type : str
         Type of join (default: "inner")
         
-    Returns:
-    --------
+    Returns
+    -------
     DataFrame
         Joined DataFrame
     """
-    joined = balance_df.join(
+    return balance_df.join(
         task_df,
         balance_df[balance_survey_col] == task_df[task_origin_id_col],
         join_type
     )
-    
-    return joined
 
 
 def merge_wonky_data_with_user_info(
-    user_info_df,
-    wonky_respondent_df,
+    user_info_df: pd.DataFrame,
+    wonky_respondent_df: pd.DataFrame,
     how: str = "left"
-):
+) -> pd.DataFrame:
     """
-    Merge wonky study data with user info df.
-    
-    This function handles both task-level and respondent-level merges.
-    If task-level columns are missing from the right DataFrame, it falls back
-    to respondent-level merge (only on respondent ID).
-    
-    Parameters:
-    -----------
+    Merge wonky study data with user info DataFrame.
+
+    Creates a composite key (respondent + task) to merge at task level,
+    and adds a wonky_user_flag for respondent-level identification.
+
+    Parameters
+    ----------
     user_info_df : pd.DataFrame
-        User info DataFrame (pandas)
+        User info DataFrame (task-level)
     wonky_respondent_df : pd.DataFrame
-        Wonky respondent DataFrame (pandas) - can be task-level or respondent-level
-    left_on : list
-        Column names for left DataFrame
-    right_on : list
-        Column names for right DataFrame
+        Wonky respondent DataFrame (task-level aggregated)
     how : str
         Type of merge (default: "left")
-        
-    Returns:
-    --------
-    pd.DataFrame
-        Merged DataFrame
-    """
-    user_info_df['user_task_pk'] = user_info_df['respondentPk'] + '_' + user_info_df['taskPk']
-    wonky_respondent_df['user_task_pk'] = wonky_respondent_df['balance_respondentPk'] + '_' + wonky_respondent_df['task_pk']
 
-    wonky_respondent_list = wonky_respondent_df['balance_respondentPk'].unique().tolist()
-    user_info_df["wonky_user_flag"] = np.where(
-    user_info_df["respondentPk"].isin(wonky_respondent_list), 1, 0
+    Returns
+    -------
+    pd.DataFrame
+        Merged DataFrame with wonky_user_flag and wonky_study_count
+    """
+    user_info_df = user_info_df.copy()
+    wonky_respondent_df = wonky_respondent_df.copy()
+    
+    user_info_df['user_task_pk'] = (
+        user_info_df['respondentPk'].astype(str) + '_' +
+        user_info_df['taskPk'].astype(str)
     )
+    wonky_respondent_df['user_task_pk'] = (
+        wonky_respondent_df['balance_respondentPk'].astype(str) + '_' +
+        wonky_respondent_df['task_pk'].astype(str)
+    )
+
+    wonky_respondent_set = set(wonky_respondent_df['balance_respondentPk'].unique())
+    user_info_df['wonky_user_flag'] = (
+        user_info_df['respondentPk'].isin(wonky_respondent_set).astype(int)
+    )
+
+    merge_cols = ['user_task_pk', 'task_pk', 'balance_respondentPk', 'wonky_study_count',
+                  'request-remote-addr', 'task_targeting_type', 'exposure_band']
+    available_merge_cols = [c for c in merge_cols if c in wonky_respondent_df.columns]
 
     return user_info_df.merge(
-        wonky_respondent_df,
-        on=["user_task_pk"],
+        wonky_respondent_df[available_merge_cols],
+        on='user_task_pk',
         how=how,
-        suffixes=("", "_wonky"),
-        indicator=True,
+        suffixes=('', '_wonky'),
+        indicator=True
     )
 
 
-    # import pandas as pd
+def drop_duplicate_columns(df: pd.DataFrame, keep: str = 'first') -> pd.DataFrame:
+    """
+    Remove duplicate columns from a pandas DataFrame.
     
-    # if not isinstance(left_on, list) or not isinstance(right_on, list):
-    #     raise TypeError("left_on and right_on must be lists")
+    This is useful after merges that create columns like 'task_pk' and 'task_pk_wonky',
+    or when Spark-to-pandas conversion results in duplicate column names.
     
-    # if len(left_on) != len(right_on):
-    #     raise ValueError(
-    #         f"left_on and right_on must have the same length. "
-    #         f"Got {len(left_on)} and {len(right_on)}"
-    #     )
-    
-    # available_pairs = []
-    # missing_cols = []
-    
-    # for left_col, right_col in zip(left_on, right_on):
-    #     left_exists = left_col in user_info_df.columns
-    #     right_exists = right_col in wonky_respondent_df.columns
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame potentially containing duplicate columns
+    keep : str
+        Which duplicate to keep: 'first' or 'last'
         
-    #     if left_exists and right_exists:
-    #         available_pairs.append((left_col, right_col))
-    #     else:
-    #         missing_cols.append({
-    #             'left_col': left_col,
-    #             'right_col': right_col,
-    #             'left_exists': left_exists,
-    #             'right_exists': right_exists
-    #         })
-    
-    # if len(available_pairs) < len(right_on):
-    #     if len(available_pairs) == 0:
-    #         error_msg = (
-    #             f"None of the specified merge columns exist in both DataFrames.\n"
-    #             f"Requested merge columns:\n"
-    #         )
-    #         for left_col, right_col in zip(left_on, right_on):
-    #             left_exists = left_col in user_info_df.columns
-    #             right_exists = right_col in wonky_respondent_df.columns
-    #             error_msg += (
-    #                 f"  - left_on='{left_col}' (exists: {left_exists}), "
-    #                 f"right_on='{right_col}' (exists: {right_exists})\n"
-    #             )
-    #         error_msg += (
-    #             f"\nAvailable columns in user_info_df: {list(user_info_df.columns)[:10]}...\n"
-    #             f"Available columns in wonky_respondent_df: {list(wonky_respondent_df.columns)[:10]}..."
-    #         )
-    #         raise ValueError(error_msg)
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with duplicate columns removed
         
-    #     left_on_actual = [available_pairs[0][0]]  
-    #     right_on_actual = [available_pairs[0][1]] 
-        
+    Example
+    -------
+    >>> df = drop_duplicate_columns(user_info_df)
+    """
+    return df.loc[:, ~df.columns.duplicated(keep=keep)]
 
-    #     if len(right_on) > 1:
-    #         missing_info = missing_cols[0] if missing_cols else {}
-    #         print(
-    #             f"Warning: Task-level merge columns not available. "
-    #             f"Missing: left_col='{missing_info.get('left_col', 'N/A')}' "
-    #             f"(exists: {missing_info.get('left_exists', False)}), "
-    #             f"right_col='{missing_info.get('right_col', 'N/A')}' "
-    #             f"(exists: {missing_info.get('right_exists', False)}).\n"
-    #             f"Falling back to respondent-level merge on '{left_on_actual[0]}' ↔ '{right_on_actual[0]}'."
-    #         )
-    # else:
-    #     # All columns available, use full merge
-    #     left_on_actual = [pair[0] for pair in available_pairs]
-    #     right_on_actual = [pair[1] for pair in available_pairs]
+
+def merge_task_metadata(
+    user_info_df: pd.DataFrame,
+    tasks_df: pd.DataFrame,
+    task_cols: Optional[List[str]] = None
+) -> pd.DataFrame:
+    """
+    Merge task metadata into user_info DataFrame, handling duplicates cleanly.
     
-    # # Perform the merge
-    # merged = user_info_df.merge(
-    #     wonky_respondent_df,
-    #     left_on=left_on_actual,
-    #     right_on=right_on_actual,
-    #     how=how,
-    #     suffixes=('', '_wonky'),
-    #     indicator=True
-    # )
+    This merges on taskPk -> task_pk and drops the redundant task_pk column
+    to avoid duplicate column issues.
     
-    # return merged
+    Parameters
+    ----------
+    user_info_df : pd.DataFrame
+        User info DataFrame with 'taskPk' column
+    tasks_df : pd.DataFrame
+        Tasks DataFrame with 'task_pk' and other metadata columns
+    task_cols : list, optional
+        Columns to bring from tasks_df. Defaults to ['task_pk', 'task_length_of_task']
+        
+    Returns
+    -------
+    pd.DataFrame
+        Merged DataFrame with task metadata added
+        
+    Example
+    -------
+    >>> user_info_df = merge_task_metadata(user_info_df, tasks_df)
+    """
+    if task_cols is None:
+        task_cols = ['task_pk', 'task_length_of_task']
+    
+    # Ensure task_pk is in the list (needed for merge)
+    if 'task_pk' not in task_cols:
+        task_cols = ['task_pk'] + task_cols
+    
+    # Only select columns that exist
+    available_cols = [c for c in task_cols if c in tasks_df.columns]
+    
+    merged = user_info_df.merge(
+        tasks_df[available_cols],
+        left_on='taskPk',
+        right_on='task_pk',
+        how='left'
+    )
+    
+    # Drop the redundant task_pk (we already have taskPk)
+    if 'task_pk' in merged.columns and 'taskPk' in merged.columns:
+        merged = merged.drop(columns=['task_pk'])
+    
+    return merged
