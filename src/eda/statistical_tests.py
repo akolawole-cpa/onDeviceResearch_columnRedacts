@@ -398,17 +398,17 @@ def run_combined_regression_tests(
 
 
 # =============================================================================
-# STAKEHOLDER-FRIENDLY FORMATTING FUNCTIONS
+# REPORT FORMATTING FUNCTIONS
 # =============================================================================
 
-def format_ols_for_stakeholders(
+def format_ols_for_report(
     ols_results: pd.DataFrame,
     baseline_mean: float,
     confidence_level: float = 0.95,
     significance_level: float = 0.05,
 ) -> pd.DataFrame:
     """
-    Format OLS results with stakeholder-friendly interpretations.
+    Format OLS results with report-friendly interpretations.
 
     Parameters
     ----------
@@ -543,12 +543,12 @@ def format_ols_for_stakeholders(
     return results[available_cols].sort_values(mean_diff_col, key=abs, ascending=False)
 
 
-def format_odds_ratios_for_stakeholders(
+def format_odds_ratios_for_report(
     logit_results: pd.DataFrame,
     significance_level: float = 0.05,
 ) -> pd.DataFrame:
     """
-    Format odds ratios with stakeholder-friendly interpretations.
+    Format odds ratios with report-friendly interpretations.
 
     Parameters
     ----------

@@ -518,7 +518,7 @@ def compute_exposure_and_gender_counts(
 
 
 # =============================================================================
-# STAKEHOLDER-FRIENDLY VISUALIZATION FUNCTIONS
+# REPORT VISUALIZATION FUNCTIONS
 # =============================================================================
 
 def create_coefficient_forest_plot(

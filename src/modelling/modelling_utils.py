@@ -4,7 +4,7 @@ Modelling Utilities Module
 Helper functions for modelling including:
 - Feature preprocessing (collinearity removal, VIF analysis)
 - SHAP analysis and feature interactions
-- Stakeholder reporting and executive summaries
+- Report generation and executive summaries
 - Model comparison scorecard
 - Calibration analysis
 
@@ -14,7 +14,7 @@ Usage:
         calculate_vif_detailed,
         run_shap_analysis,
         analyze_feature_interactions,
-        create_stakeholder_report,
+        create_report,
         create_model_scorecard,
         analyze_logistic_calibration,
         generate_modelling_executive_summary,
@@ -582,20 +582,20 @@ def plot_shap_dependence(
 
 
 # =============================================================================
-# STAKEHOLDER REPORTING
+# REPORT GENERATION
 # =============================================================================
 
 def interpret_odds_ratio(or_value: float) -> str:
     """Convert odds ratio to plain English."""
     if pd.isna(or_value) or or_value <= 0:
         return "Invalid"
-    
+
     if or_value > 100 or or_value < 0.01:
         return "⚠️ Extreme"
-    
+
     if abs(or_value - 1) < 0.05:
         return "No effect"
-    
+
     if or_value > 1:
         pct = (or_value - 1) * 100
         if pct > 100:
@@ -606,19 +606,19 @@ def interpret_odds_ratio(or_value: float) -> str:
         return f"↓ {pct:.0f}% less likely"
 
 
-def create_stakeholder_report(results: Dict) -> pd.DataFrame:
+def create_report(results: Dict) -> pd.DataFrame:
     """
     Create a clean, presentation-ready summary table.
-    
+
     Parameters:
     -----------
     results : Dict
         Output from run_all_models()
-    
+
     Returns:
     --------
     pd.DataFrame
-        Formatted table for stakeholders
+        Formatted table for reporting
     """
     comp = results['comparison'].copy()
     
@@ -665,7 +665,7 @@ def create_stakeholder_report(results: Dict) -> pd.DataFrame:
 
 def print_model_summary(results: Dict):
     """
-    Print comprehensive model summary for stakeholders.
+    Print comprehensive model summary for reporting.
     """
     print("="*80)
     print("📊 MODEL RESULTS SUMMARY")
@@ -884,8 +884,8 @@ def create_model_scorecard(results: Dict) -> pd.DataFrame:
     """
     Create a unified scorecard comparing all models.
 
-    This provides stakeholders with a quick comparison of model
-    performance, interpretability, and recommended use cases.
+    This provides a quick comparison of model performance,
+    interpretability, and recommended use cases.
 
     Parameters:
     -----------
@@ -1160,7 +1160,7 @@ def generate_modelling_executive_summary(
     outcome_description: str = "wonkiness",
 ) -> str:
     """
-    Generate a comprehensive executive summary for stakeholders.
+    Generate a comprehensive executive summary for reporting.
 
     This provides a narrative summary of modelling results including
     key predictors, risk factors, and model recommendations.
