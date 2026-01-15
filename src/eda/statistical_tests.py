@@ -672,9 +672,10 @@ def format_odds_ratios_for_stakeholders(
 
     # Direction classification
     def classify_direction(row):
-        if row['p_value'] >= significance_level:
+        p_val = row[p_value_col]
+        if pd.isna(p_val) or p_val >= significance_level:
             return "Neutral"
-        or_val = row['odds_ratio']
+        or_val = row[or_col]
         if pd.isna(or_val):
             return "Unknown"
         if or_val > 1.05:
@@ -685,14 +686,14 @@ def format_odds_ratios_for_stakeholders(
 
     results['direction'] = results.apply(classify_direction, axis=1)
 
-    # Select and reorder columns
+    # Select and reorder columns - use the actual column names from the input
     output_cols = [
-        'feature', 'odds_ratio', 'or_formatted', 'interpretation',
-        'p_value', 'significance', 'impact_category', 'direction'
+        'feature', or_col, 'or_formatted', 'interpretation',
+        p_value_col, 'significance', 'impact_category', 'direction'
     ]
     available_cols = [c for c in output_cols if c in results.columns]
 
-    return results[available_cols].sort_values('odds_ratio', key=lambda x: abs(np.log(x)), ascending=False)
+    return results[available_cols].sort_values(or_col, key=lambda x: abs(np.log(x)), ascending=False)
 
 
 def generate_testing_executive_summary(
