@@ -126,49 +126,6 @@ def create_threshold_features(
     return pd.concat([df, pd.DataFrame(new_features, index=df.index)], axis=1)
 
 
-def create_delta_category_features(
-    df: pd.DataFrame,
-    delta_column: str,
-    prefix: Optional[str] = None,
-    large_threshold: float = 50,
-) -> pd.DataFrame:
-    """
-    Create categorical features from a delta/change column.
-    
-    Replaces this repeated pattern:
-        df['quality_delta_LargePostive'] = np.where(df['quality_delta'] > 50, 1, 0)
-        df['quality_delta_Postive'] = np.where(df['quality_delta'] > 0, 1, 0)
-        df['quality_delta_Neutral'] = np.where(df['quality_delta'] == 0, 1, 0)
-        df['quality_delta_LargeNegative'] = np.where(df['quality_delta'] < -50, 1, 0)
-        df['quality_delta_Negative'] = np.where(df['quality_delta'] < 0, 1, 0)
-    
-    Args:
-        df: Input DataFrame
-        delta_column: Column containing the delta values
-        prefix: Prefix for new columns (defaults to delta_column + '_')
-        large_threshold: Threshold for "large" positive/negative (default 50)
-    
-    Returns:
-        DataFrame with new category columns added
-    
-    Example:
-        df = create_delta_category_features(df, 'quality_delta')
-        df = create_delta_category_features(df, 'risk_delta', large_threshold=30)
-    """
-    if prefix is None:
-        prefix = f"{delta_column}_"
-    
-    new_features = {
-        f'{prefix}LargePositive': np.where(df[delta_column] > large_threshold, 1, 0),
-        f'{prefix}Positive': np.where(df[delta_column] > 0, 1, 0),
-        f'{prefix}Neutral': np.where(df[delta_column] == 0, 1, 0),
-        f'{prefix}LargeNegative': np.where(df[delta_column] < -large_threshold, 1, 0),
-        f'{prefix}Negative': np.where(df[delta_column] < 0, 1, 0),
-    }
-    
-    return pd.concat([df, pd.DataFrame(new_features, index=df.index)], axis=1)
-
-
 def create_binned_features(
     df: pd.DataFrame,
     column: str,
@@ -224,9 +181,6 @@ def create_binned_features(
     
     new_features = {}
     
-    # =========================================================================
-    # CUMULATIVE BINS (less than thresholds) - Original behavior
-    # =========================================================================
     for limit in bins:
         new_features[f'{prefix}<{limit}'] = np.where(df[column] < limit, 1, 0)
     
@@ -234,11 +188,7 @@ def create_binned_features(
         last_bin = bins[-1]
         new_features[f'{prefix}>={last_bin}'] = np.where(df[column] >= last_bin, 1, 0)
     
-    # =========================================================================
-    # MUTUALLY EXCLUSIVE BINS (between thresholds) - New feature
-    # =========================================================================
     if include_mutually_exclusive:
-        # Build boundaries: [0] + bins
         boundaries = [0] + bins
         
         for i in range(len(boundaries)):
@@ -248,23 +198,17 @@ def create_binned_features(
                 upper = boundaries[i + 1]
                 
                 if i == 0:
-                    # First bin: 0 to first_threshold (inclusive)
-                    # e.g., 0_to_2 means values 0, 1, 2
                     col_name = f"{prefix}{lower}_to_{upper}"
                     new_features[col_name] = np.where(
                         (df[column] >= lower) & (df[column] <= upper), 1, 0
                     )
                 else:
-                    # Subsequent bins: prev_threshold+1 to current_threshold
-                    # e.g., 3_to_10 means values 3, 4, 5, ..., 10
                     actual_lower = lower + 1
                     col_name = f"{prefix}{actual_lower}_to_{upper}"
                     new_features[col_name] = np.where(
                         (df[column] >= actual_lower) & (df[column] <= upper), 1, 0
                     )
             else:
-                # Last bin: threshold+1 and above
-                # e.g., 51_plus means values >= 51
                 actual_lower = lower + 1
                 col_name = f"{prefix}{actual_lower}_plus"
                 new_features[col_name] = np.where(df[column] >= actual_lower, 1, 0)
@@ -461,10 +405,6 @@ def filter_to_engineered_features(
     
     return df[final_cols]
 
-
-# =============================================================================
-# DEVICE MAPPING FUNCTIONS
-# =============================================================================
 
 def map_hardware_to_category(hardware: Optional[str]) -> str:
     """
