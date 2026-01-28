@@ -1,18 +1,29 @@
 """
-Statistical Tests Module - Simplified & Optimized
+Statistical Tests Module - Simplified & Streamlined
 
-Contains only the regression functions actually used in the analysis pipeline:
-- OLS_with_cluster_robust_test (parallelized)
-- logistic_regression_with_cluster_robust_test (parallelized)
-- run_combined_regression_tests (parallelized)
+Runs OLS and Logistic Regression with cluster-robust standard errors.
+Outputs a single combined results table with interpretations.
 
-All functions support parallel execution via joblib for significant speedups
-when testing many features (e.g., 281 features -> ~4-6x faster with n_jobs=-1).
+Main function: run_statistical_tests()
+
+Output columns:
+- feature: Feature name
+- feature_type: 'binary' or 'numeric'
+- n_wonky, n_non_wonky: Sample sizes for each group
+- wonky_mean, non_wonky_mean: Outcome means by group
+- ols_coefficient, ols_se, ols_t_stat, ols_p_value, ols_significant
+- cohens_d, cohens_d_magnitude
+- ols_interpretation: Type-aware interpretation
+- odds_ratio, or_ci_lower, or_ci_upper
+- logit_coefficient, logit_se, logit_z_stat, logit_p_value, logit_significant  
+- or_magnitude
+- lr_interpretation: Type-aware interpretation
+- significant_both, significant_either
 """
 
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import warnings
 
 import statsmodels.api as sm
@@ -24,769 +35,554 @@ try:
     HAS_JOBLIB = True
 except ImportError:
     HAS_JOBLIB = False
-    warnings.warn("joblib not installed. Install with: pip install joblib")
+    warnings.warn("joblib not installed. Parallel processing disabled.")
 
 
-# =============================================================================
-# Effect Size Interpretation (Internal)
-# =============================================================================
+# INTERNAL HELPERS
 
-def _interpret_effect_size(value: float, thresholds: Dict[str, float]) -> str:
-    """Interpret effect size magnitude based on thresholds."""
-    if pd.isna(value):
+def _get_significance_stars(p: float) -> str:
+    """Return significance stars based on p-value."""
+    if pd.isna(p):
+        return ''
+    if p < 0.001:
+        return '***'
+    elif p < 0.01:
+        return '**'
+    elif p < 0.05:
+        return '*'
+    return ''
+
+
+def _interpret_cohens_d(d: float) -> str:
+    """Interpret Cohen's d effect size magnitude."""
+    if pd.isna(d):
         return "undefined"
-
-    abs_value = abs(value)
-
-    if abs_value < thresholds["small"]:
+    abs_d = abs(d)
+    if abs_d < 0.2:
         return "negligible"
-    elif abs_value < thresholds["medium"]:
+    elif abs_d < 0.5:
         return "small"
-    elif abs_value < thresholds["large"]:
+    elif abs_d < 0.8:
         return "medium"
     return "large"
 
 
-def _interpret_effect_size_or(value: float, thresholds: Dict[str, float]) -> str:
-    """Interpret effect size for odds ratios (distance from 1)."""
-    if pd.isna(value) or value <= 0:
+def _interpret_odds_ratio(or_val: float) -> str:
+    """Interpret odds ratio effect size magnitude."""
+    if pd.isna(or_val) or or_val <= 0:
         return "undefined"
+    # Use max(OR, 1/OR) for symmetric interpretation
+    or_effect = max(or_val, 1/or_val)
+    if or_effect < 1.5:
+        return "negligible"
+    elif or_effect < 2.5:
+        return "small"
+    elif or_effect < 4.0:
+        return "medium"
+    return "large"
+
+
+def _detect_feature_type(series: pd.Series) -> str:
+    """
+    Detect if a feature is binary or numeric.
     
-    if value < thresholds["small"]:
-        return "negligible"
-    elif value < thresholds["medium"]:
-        return "small"
-    elif value < thresholds["large"]:
-        return "medium"
-    return "large"
+    Binary: only contains values in {0, 1} (or {0}, {1}, {True, False})
+    Numeric: everything else (continuous, ordinal with >2 values, etc.)
+    """
+    unique_vals = series.dropna().unique()
+    
+    # Check if binary (0/1 or True/False)
+    if len(unique_vals) <= 2:
+        unique_set = set(unique_vals)
+        if unique_set <= {0, 1, True, False, 0.0, 1.0}:
+            return 'binary'
+    
+    return 'numeric'
 
 
-# =============================================================================
-# Single Feature Fitting (Internal - for parallel execution)
-# =============================================================================
+# SINGLE FEATURE FITTING (for parallel execution)
 
-def _fit_ols_single_feature(
+def _fit_single_feature(
     feature: str,
     df: pd.DataFrame,
     outcome_var: str,
+    outcome_binary: str,
     user_id_var: str,
     significance_level: float,
-    cohens_d_thresholds: Dict[str, float],
+    baseline_mean: float,
 ) -> Optional[Dict]:
-    """Fit OLS with cluster-robust SE for a single feature."""
+    """
+    Fit both OLS and Logistic regression for a single feature.
+    Returns combined results dictionary.
+    
+    Note on naming convention:
+    - wonky_mean: mean of the FEATURE when outcome_var > 0 (i.e., among wonky respondents)
+    - non_wonky_mean: mean of the FEATURE when outcome_var == 0 (i.e., among non-wonky respondents)
+    - n_wonky: count of wonky respondents (outcome > 0)
+    - n_non_wonky: count of non-wonky respondents (outcome == 0)
+    """
     if feature not in df.columns:
         return None
     
-    cols_needed = [user_id_var, outcome_var, feature]
+    cols_needed = [user_id_var, outcome_var, outcome_binary, feature]
     df_test = df[cols_needed].dropna()
     
+    # Checks
     if len(df_test) < 30 or df_test[feature].nunique() < 2:
         return None
+    if df_test[outcome_binary].nunique() < 2:
+        return None
     
-    try:
-        X = sm.add_constant(df_test[[feature]])
-        y = df_test[outcome_var]
+    # Detect feature type
+    feature_type = _detect_feature_type(df_test[feature])
+    
+    # Calculating wonky rates 
+    mask_wonky = df_test[outcome_binary] == 1  # outcome > 0
+    mask_non_wonky = df_test[outcome_binary] == 0  # outcome == 0
+    
+    n_wonky = mask_wonky.sum()
+    n_non_wonky = mask_non_wonky.sum()
+    
+    if n_wonky < 5 or n_non_wonky < 5:
+        return None
+    
+    wonky_mean = df_test.loc[mask_wonky, feature].mean()
+    non_wonky_mean = df_test.loc[mask_non_wonky, feature].mean()
+    
+    # For binary features: calculate sample sizes by feature presence
+    # For numeric features: skip this check
+    if feature_type == 'binary':
+        mask_with_feature = df_test[feature] == 1
+        mask_without_feature = df_test[feature] == 0
+        n_with_feature = mask_with_feature.sum()
+        n_without_feature = mask_without_feature.sum()
         
-        model = OLS(y, X)
-        result = model.fit(
+        # Only skip if BOTH groups are too small (allows rare features)
+        if n_with_feature < 5 and n_without_feature < 5:
+            return None
+        
+        # Calculate outcome means by feature presence (if enough samples)
+        if n_with_feature >= 1:
+            mean_outcome_with_feature = df_test.loc[mask_with_feature, outcome_var].mean()
+        else:
+            mean_outcome_with_feature = None
+            
+        if n_without_feature >= 1:
+            mean_outcome_without_feature = df_test.loc[mask_without_feature, outcome_var].mean()
+        else:
+            mean_outcome_without_feature = None
+    else:
+        # For numeric features
+        n_with_feature = None
+        n_without_feature = None
+        mean_outcome_with_feature = None
+        mean_outcome_without_feature = None
+    
+    result = {
+        'feature': feature,
+        'feature_type': feature_type,
+        # Sample sizes by outcome group
+        'n_wonky': int(n_wonky),
+        'n_non_wonky': int(n_non_wonky),
+        # Feature prevalence/mean by outcome group
+        'wonky_mean': wonky_mean,
+        'non_wonky_mean': non_wonky_mean,
+        # Sample sizes by feature presence (binary only)
+        'n_with_feature': int(n_with_feature) if n_with_feature is not None else None,
+        'n_without_feature': int(n_without_feature) if n_without_feature is not None else None,
+        # Outcome means by feature presence (binary only)
+        'mean_outcome_with_feature': mean_outcome_with_feature,
+        'mean_outcome_without_feature': mean_outcome_without_feature,
+    }
+    
+    # --- OLS Regression ---
+    try:
+        X_ols = sm.add_constant(df_test[[feature]])
+        y_ols = df_test[outcome_var]
+        
+        ols_model = OLS(y_ols, X_ols)
+        ols_result = ols_model.fit(
             cov_type='cluster',
             cov_kwds={'groups': df_test[user_id_var]}
         )
         
-        coef = result.params[feature]
-        mask_with = df_test[feature] == 1
+        ols_coef = ols_result.params[feature]
+        ols_se = ols_result.bse[feature]
+        ols_p = ols_result.pvalues[feature]
         std_y = df_test[outcome_var].std()
-        cohens_d = coef / std_y if std_y > 0 else np.nan
+        cohens_d = ols_coef / std_y if std_y > 0 else np.nan
         
-        return {
-            'feature': feature,
-            'mean_with_feature': df_test.loc[mask_with, outcome_var].mean(),
-            'mean_without_feature': df_test.loc[~mask_with, outcome_var].mean(),
-            'mean_difference': coef,
-            't_statistic': result.tvalues[feature],
-            'p_value': result.pvalues[feature],
-            'significant': result.pvalues[feature] < significance_level,
-            'se_cluster_robust': result.bse[feature],
+        # OLS interpretation - type-aware
+        if ols_p < significance_level:
+            direction = "increases" if ols_coef > 0 else "decreases"
+            
+            if baseline_mean != 0:
+                pct_change = (ols_coef / baseline_mean) * 100
+                
+                if feature_type == 'binary':
+                    # Binary: "Having this feature increases wonkiness by X%"
+                    ols_interpretation = f"{direction} wonkiness by {abs(pct_change):.2f}%"
+                    ols_interpretation_short = f"{abs(pct_change):.2f}% {direction} "
+                else:
+                    # Numeric: "Each 1-unit increase raises wonkiness by X%"
+                    ols_interpretation = f"unit increase {direction} wonkiness by {abs(pct_change):.2f}%"
+                    ols_interpretation_short = f"{abs(pct_change):.2f}% {direction}"
+            else:
+                if feature_type == 'binary':
+                    ols_interpretation = f"{direction} wonkiness by {abs(ols_coef):.3f} units"
+                    ols_interpretation_short = f"{abs(ols_coef):.2f} {direction}"
+                else:
+                    ols_interpretation = f"unit increase {direction} wonkiness by {abs(ols_coef):.2f} units"
+                    ols_interpretation_short = f"{abs(ols_coef):.2f} {direction}"
+        else:
+            ols_interpretation = "No significant effect"
+            ols_interpretation_short = "-"
+        
+        result.update({
+            'ols_coefficient': ols_coef,
+            'ols_se': ols_se,
+            'ols_t_stat': ols_result.tvalues[feature],
+            'ols_p_value': ols_p,
+            'ols_significant': ols_p < significance_level,
             'cohens_d': cohens_d,
-            'effect_size_interpretation': _interpret_effect_size(cohens_d, cohens_d_thresholds),
-        }
-    except Exception:
-        return None
-
-
-def _fit_logit_single_feature(
-    feature: str,
-    df: pd.DataFrame,
-    outcome_col: str,
-    user_id_var: str,
-    significance_level: float,
-    or_thresholds: Dict[str, float],
-) -> Optional[Dict]:
-    """Fit Logistic regression with cluster-robust SE for a single feature."""
-    if feature not in df.columns:
-        return None
+            'cohens_d_magnitude': _interpret_cohens_d(cohens_d),
+            'ols_interpretation': ols_interpretation,
+            'ols_interpretation_short': ols_interpretation_short,
+        })
+    except Exception as e:
+        result.update({
+            'ols_coefficient': np.nan,
+            'ols_se': np.nan,
+            'ols_t_stat': np.nan,
+            'ols_p_value': np.nan,
+            'ols_significant': False,
+            'cohens_d': np.nan,
+            'cohens_d_magnitude': 'error',
+            'ols_interpretation': f'OLS failed: {str(e)[:50]}',
+            'ols_interpretation_short': f'OLS failed: {str(e)[:50]}',
+        })
     
-    cols_needed = [user_id_var, outcome_col, feature]
-    df_test = df[cols_needed].dropna()
-    
-    if len(df_test) < 30:
-        return None
-    
-    y = df_test[outcome_col]
-    if y.nunique() < 2 or df_test[feature].nunique() < 2:
-        return None
-    
+    # --- Logistic Regression ---
     try:
-        X = sm.add_constant(df_test[[feature]])
-        model = Logit(y, X)
+        X_logit = sm.add_constant(df_test[[feature]])
+        y_logit = df_test[outcome_binary]
         
+        logit_model = Logit(y_logit, X_logit)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            result = model.fit(
+            logit_result = logit_model.fit(
                 cov_type='cluster',
                 cov_kwds={'groups': df_test[user_id_var]},
                 disp=False,
                 maxiter=100,
             )
         
-        coef = result.params[feature]
-        conf_int = result.conf_int().loc[feature]
-        odds_ratio = np.exp(coef)
+        logit_coef = logit_result.params[feature]
+        logit_se = logit_result.bse[feature]
+        logit_p = logit_result.pvalues[feature]
+        odds_ratio = np.exp(logit_coef)
         
-        mask_with = df_test[feature] == 1
-        or_effect = max(odds_ratio, 1/odds_ratio) if odds_ratio > 0 else np.nan
+        # Confidence interval for OR
+        conf_int = logit_result.conf_int().loc[feature]
+        or_ci_lower = np.exp(conf_int[0])
+        or_ci_upper = np.exp(conf_int[1])
         
-        return {
-            'feature': feature,
-            'log_odds_coef': coef,
+        # LR interpretation - type-aware
+        if logit_p < significance_level:
+            if feature_type == 'binary':
+                # Binary feature interpretations
+                if odds_ratio > 5:
+                    lr_interpretation = f"Very strong effect: odds {odds_ratio:.2f}x higher"
+                    lr_interpretation_short = f"{odds_ratio:.2f}x higher"
+                elif odds_ratio > 2:
+                    lr_interpretation = f"Odds are {odds_ratio:.2f}x higher for wonky"
+                    lr_interpretation_short = f"{odds_ratio:.2f}x higher"
+                elif odds_ratio > 1:
+                    pct = (odds_ratio - 1) * 100
+                    lr_interpretation = f"{pct:.2f}% higher odds of being wonky"
+                    lr_interpretation_short = f"{pct:.2f}% higher"
+                elif odds_ratio < 0.2:
+                    inverse_or = 1 / odds_ratio
+                    lr_interpretation = f"Very strong protective: odds {inverse_or:.2f}x lower"
+                    lr_interpretation_short = f"{inverse_or:.2f}x lower"
+                elif odds_ratio < 0.5:
+                    inverse_or = 1 / odds_ratio
+                    lr_interpretation = f"Odds are {inverse_or:.2f}x lower for wonky"
+                    lr_interpretation_short = f"{inverse_or:.2f}x lower"
+                else:
+                    pct = (1 - odds_ratio) * 100
+                    lr_interpretation = f"{pct:.2f}% lower odds of being wonky"
+                    lr_interpretation_short = f"{pct:.2f}% lower"
+            else:
+                # Numeric feature interpretations
+                if odds_ratio > 2:
+                    lr_interpretation = f"Each unit increase: odds {odds_ratio:.2f}x higher"
+                    lr_interpretation_short = f"{odds_ratio:.2f}x higher"
+                elif odds_ratio > 1:
+                    pct = (odds_ratio - 1) * 100
+                    lr_interpretation = f"Each unit increase: {pct:.2f}% higher odds"
+                    lr_interpretation_short = f"{pct:.2f}% higher"
+                elif odds_ratio < 0.5:
+                    inverse_or = 1 / odds_ratio
+                    lr_interpretation = f"Each unit increase: odds {inverse_or:.2f}x lower"
+                    lr_interpretation_short = f"{inverse_or:.2f}x lower"
+                else:
+                    pct = (1 - odds_ratio) * 100
+                    lr_interpretation = f"Each unit increase: {pct:.2f}% lower odds"
+                    lr_interpretation_short = f"{pct:.2f}% lower"
+        else:
+            lr_interpretation = f"No significant effect (p={logit_p:.3f})"
+        
+        result.update({
             'odds_ratio': odds_ratio,
-            'or_ci_lower': np.exp(conf_int[0]),
-            'or_ci_upper': np.exp(conf_int[1]),
-            'z_statistic': result.tvalues[feature],
-            'p_value': result.pvalues[feature],
-            'se_cluster_robust': result.bse[feature],
-            'significant': result.pvalues[feature] < significance_level,
-            'prop_outcome_with_feature': df_test.loc[mask_with, outcome_col].mean(),
-            'prop_outcome_without_feature': df_test.loc[~mask_with, outcome_col].mean(),
-            'prop_difference': df_test.loc[mask_with, outcome_col].mean() - df_test.loc[~mask_with, outcome_col].mean(),
-            'pseudo_r2': result.prsquared,
-            'effect_size_interpretation': _interpret_effect_size_or(or_effect, or_thresholds),
-            'n_obs': len(df_test),
-        }
-    except Exception:
-        return None
+            'or_ci_lower': or_ci_lower,
+            'or_ci_upper': or_ci_upper,
+            'logit_coefficient': logit_coef,
+            'logit_se': logit_se,
+            'logit_z_stat': logit_result.tvalues[feature],
+            'logit_p_value': logit_p,
+            'logit_significant': logit_p < significance_level,
+            'or_magnitude': _interpret_odds_ratio(odds_ratio),
+            'lr_interpretation': lr_interpretation,
+            'lr_interpretation_short': lr_interpretation_short,
+        })
+    except Exception as e:
+        result.update({
+            'odds_ratio': np.nan,
+            'or_ci_lower': np.nan,
+            'or_ci_upper': np.nan,
+            'logit_coefficient': np.nan,
+            'logit_se': np.nan,
+            'logit_z_stat': np.nan,
+            'logit_p_value': np.nan,
+            'logit_significant': False,
+            'or_magnitude': 'error',
+            'lr_interpretation': f'Logit failed: {str(e)[:50]}',
+            'lr_interpretation_short': f'Logit failed: {str(e)[:50]}',
+        })
+    
+    return result
 
 
-# =============================================================================
-# Public API
-# =============================================================================
+# MAIN PUBLIC FUNCTION
 
-def OLS_with_cluster_robust_test(
+def run_statistical_tests(
     df: pd.DataFrame,
-    feature_set: List[str],
+    feature_list: List[str],
     outcome_var: str = "wonky_study_count",
     user_id_var: str = "respondentPk",
     significance_level: float = 0.05,
     n_jobs: int = -1,
+    verbose: bool = True,
 ) -> pd.DataFrame:
     """
-    OLS analysis with cluster-robust standard errors (parallelized).
-
+    Run OLS and Logistic Regression tests for all features.
+    
+    This function runs both models in a single pass per feature:
+    - OLS: For effect size estimates (coefficient), p-values, and Cohen's d
+    - Logistic Regression: For odds ratios and alternative interpretation
+    
     Parameters
     ----------
     df : pd.DataFrame
-        DataFrame with features, outcome, and user identifier
-    feature_set : List[str]
+        DataFrame containing features, outcome variable, and user identifier
+    feature_list : List[str]
         List of feature column names to test
     outcome_var : str
-        Outcome variable name
+        Name of the outcome variable (count-based, e.g., wonky_study_count)
     user_id_var : str
-        User identifier for clustering
+        Name of the user identifier column for cluster-robust SE
     significance_level : float
-        Significance level for determining significance
+        P-value threshold for significance (default: 0.05)
     n_jobs : int
         Number of parallel jobs. -1 = all cores, 1 = sequential
-
+    verbose : bool
+        Print progress information
+    
     Returns
     -------
     pd.DataFrame
-        Results with mean_difference, t_statistic, p_value, cohens_d,
-        effect_size_interpretation, and significance for each feature
-    """
-    cohens_d_thresholds = {"small": 0.2, "medium": 0.5, "large": 0.8}
+        Combined results with columns:
+        - feature: Feature name
+        - feature_type: 'binary' or 'numeric'
+        - n_wonky, n_non_wonky: Sample sizes by outcome
+        - wonky_mean, non_wonky_mean: Feature means by outcome group
+        - n_with_feature, n_without_feature: Sample sizes (binary only)
+        - ols_coefficient, ols_se, ols_t_stat, ols_p_value, ols_significant
+        - cohens_d, cohens_d_magnitude
+        - ols_interpretation: Type-aware interpretation
+        - odds_ratio, or_ci_lower, or_ci_upper
+        - logit_coefficient, logit_se, logit_z_stat, logit_p_value, logit_significant
+        - or_magnitude
+        - lr_interpretation: Type-aware interpretation
+        - significant_both, significant_either
     
-    valid_features = [f for f in feature_set if f in df.columns]
+    Example
+    -------
+    >>> results = run_statistical_tests(
+    ...     df=user_data,
+    ...     feature_list=['is_weekend', 'days_active', 'quality_score'],
+    ...     outcome_var='wonky_study_count',
+    ...     user_id_var='respondentPk'
+    ... )
+    >>> results[['feature', 'feature_type', 'ols_interpretation', 'lr_interpretation']].head()
+    """
+    # Validate inputs
+    valid_features = [f for f in feature_list if f in df.columns]
+    missing = set(feature_list) - set(valid_features)
+    
+    if verbose and missing:
+        print(f"⚠ {len(missing)} features not found in DataFrame:")
+        for m in list(missing)[:5]:
+            # Try to find similar column names
+            similar = [c for c in df.columns if m[:20] in c or c[:20] in m]
+            if similar:
+                print(f"  '{m}' - similar columns found: {similar[:3]}")
+            else:
+                print(f"  '{m}' - no similar columns found")
+        if len(missing) > 5:
+            print(f"  ... and {len(missing) - 5} more")
+    
     if not valid_features:
+        print("No valid features to test.")
         return pd.DataFrame()
     
-    # Prepare data once
+    if verbose:
+        print(f"Testing {len(valid_features)} features...")
+    
+    # Prepare data
     cols = [user_id_var, outcome_var] + valid_features
     df_prep = df[cols].copy()
     df_prep[outcome_var] = df_prep[outcome_var].fillna(0)
     
-    # Parallel or sequential execution
+    # Create binary outcome for logistic regression
+    outcome_binary = f"{outcome_var}_binary"
+    df_prep[outcome_binary] = (df_prep[outcome_var] > 0).astype(int)
+    
+    # Calculate baseline mean for interpretation
+    baseline_mean = df_prep[outcome_var].mean()
+    
+    if verbose:
+        print(f"Baseline mean ({outcome_var}): {baseline_mean:.4f}")
+        print(f"Wonky rate: {df_prep[outcome_binary].mean():.2%}")
+    
+    # Run tests (parallel or sequential)
     if HAS_JOBLIB and n_jobs != 1 and len(valid_features) > 3:
-        results = Parallel(n_jobs=n_jobs, prefer="threads")(
-            delayed(_fit_ols_single_feature)(
-                f, df_prep, outcome_var, user_id_var, significance_level, cohens_d_thresholds
-            )
-            for f in valid_features
-        )
-    else:
-        results = [
-            _fit_ols_single_feature(
-                f, df_prep, outcome_var, user_id_var, significance_level, cohens_d_thresholds
-            )
-            for f in valid_features
-        ]
-    
-    results = [r for r in results if r is not None]
-    if not results:
-        return pd.DataFrame()
-    
-    return pd.DataFrame(results).set_index('feature').sort_values('t_statistic', key=abs, ascending=False)
-
-
-def logistic_regression_with_cluster_robust_test(
-    df: pd.DataFrame,
-    feature_set: List[str],
-    outcome_var: str = "wonky_study_count",
-    user_id_var: str = "respondentPk",
-    significance_level: float = 0.05,
-    binarize_outcome: bool = True,
-    n_jobs: int = -1,
-) -> pd.DataFrame:
-    """
-    Logistic regression with cluster-robust standard errors (parallelized).
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        DataFrame with features, outcome, and user identifier
-    feature_set : List[str]
-        List of feature column names to test
-    outcome_var : str
-        Outcome variable name (will be binarized if binarize_outcome=True)
-    user_id_var : str
-        User identifier for clustering
-    significance_level : float
-        Significance level for determining significance
-    binarize_outcome : bool
-        If True, convert outcome to binary (>0 = 1, else 0)
-    n_jobs : int
-        Number of parallel jobs. -1 = all cores, 1 = sequential
-
-    Returns
-    -------
-    pd.DataFrame
-        Results with odds_ratio, z_statistic, p_value, effect_size for each feature
+        if verbose:
+            print(f"Running in parallel (n_jobs={n_jobs})...")
         
-    Notes
-    -----
-    - Odds Ratio > 1: feature increases probability of outcome
-    - Odds Ratio < 1: feature decreases probability of outcome
-    """
-    or_thresholds = {"small": 1.5, "medium": 2.5, "large": 4.0}
-    
-    valid_features = [f for f in feature_set if f in df.columns]
-    if not valid_features:
-        return pd.DataFrame()
-    
-    # Prepare data once
-    cols = [user_id_var, outcome_var] + valid_features
-    df_prep = df[cols].copy()
-    df_prep[outcome_var] = df_prep[outcome_var].fillna(0)
-    
-    outcome_col = outcome_var
-    if binarize_outcome:
-        outcome_col = f"{outcome_var}_binary"
-        df_prep[outcome_col] = (df_prep[outcome_var] > 0).astype(int)
-    
-    if df_prep[outcome_col].nunique() < 2:
-        warnings.warn("Outcome variable has no variation")
-        return pd.DataFrame()
-    
-    # Parallel or sequential execution
-    if HAS_JOBLIB and n_jobs != 1 and len(valid_features) > 3:
         results = Parallel(n_jobs=n_jobs, prefer="threads")(
-            delayed(_fit_logit_single_feature)(
-                f, df_prep, outcome_col, user_id_var, significance_level, or_thresholds
+            delayed(_fit_single_feature)(
+                f, df_prep, outcome_var, outcome_binary, 
+                user_id_var, significance_level, baseline_mean
             )
             for f in valid_features
         )
     else:
+        if verbose:
+            print("Running sequentially...")
+        
         results = [
-            _fit_logit_single_feature(
-                f, df_prep, outcome_col, user_id_var, significance_level, or_thresholds
+            _fit_single_feature(
+                f, df_prep, outcome_var, outcome_binary,
+                user_id_var, significance_level, baseline_mean
             )
             for f in valid_features
         ]
     
+    # Filter out None results and create DataFrame
     results = [r for r in results if r is not None]
+    
     if not results:
+        print("No features passed validation checks.")
         return pd.DataFrame()
     
-    return pd.DataFrame(results).set_index('feature').sort_values('z_statistic', key=abs, ascending=False)
+    results_df = pd.DataFrame(results)
+    
+    # Add combined significance columns
+    results_df['significant_both'] = (
+        results_df['ols_significant'] & results_df['logit_significant']
+    )
+    results_df['significant_either'] = (
+        results_df['ols_significant'] | results_df['logit_significant']
+    )
+    
+    # Add significance stars
+    results_df['ols_stars'] = results_df['ols_p_value'].apply(_get_significance_stars)
+    results_df['logit_stars'] = results_df['logit_p_value'].apply(_get_significance_stars)
+    
+    # Sort by OLS t-statistic magnitude
+    results_df = results_df.sort_values('ols_t_stat', key=abs, ascending=False)
+    results_df = results_df.set_index('feature')
+    
+    if verbose:
+        n_sig_both = results_df['significant_both'].sum()
+        n_sig_ols = results_df['ols_significant'].sum()
+        n_sig_logit = results_df['logit_significant'].sum()
+        n_binary = (results_df['feature_type'] == 'binary').sum()
+        n_numeric = (results_df['feature_type'] == 'numeric').sum()
+        print(f"\n✓ Testing complete!")
+        print(f"  Feature types:        {n_binary} binary, {n_numeric} numeric")
+        print(f"  Significant (OLS):    {n_sig_ols}/{len(results_df)}")
+        print(f"  Significant (Logit):  {n_sig_logit}/{len(results_df)}")
+        print(f"  Significant (Both):   {n_sig_both}/{len(results_df)}")
+    
+    return results_df
 
 
-def run_combined_regression_tests(
-    df: pd.DataFrame,
-    feature_set: List[str],
-    outcome_var: str = "wonky_study_count",
-    user_id_var: str = "respondentPk",
-    significance_level: float = 0.05,
-    n_jobs: int = -1,
+# SUMMARY & FORMATTING FUNCTIONS
+
+def get_summary_table(
+    results_df: pd.DataFrame,
+    top_n: int = 20,
+    sort_by: str = 'ols_t_stat',
 ) -> pd.DataFrame:
     """
-    Run both OLS and Logistic regression and combine results (parallelized).
-
+    Create a stakeholder-friendly summary table.
+    
     Parameters
     ----------
-    df : pd.DataFrame
-        DataFrame with features, outcome, and user identifier
-    feature_set : List[str]
-        List of feature column names to test
-    outcome_var : str
-        Outcome variable name
-    user_id_var : str
-        User identifier for clustering
-    significance_level : float
-        Significance level
-    n_jobs : int
-        Number of parallel jobs. -1 = all cores, 1 = sequential
-
+    results_df : pd.DataFrame
+        Output from run_statistical_tests()
+    top_n : int
+        Number of top features to include
+    sort_by : str
+        Column to sort by (default: 'ols_t_stat')
+    
     Returns
     -------
     pd.DataFrame
-        Combined results with OLS and Logistic metrics side by side,
-        plus 'significant_both' and 'significant_either' columns
+        Summary with key columns for reporting
     """
-    ols_results = OLS_with_cluster_robust_test(
-        df, feature_set, outcome_var, user_id_var, significance_level, n_jobs=n_jobs
-    )
+    df = results_df.reset_index().copy()
     
-    logit_results = logistic_regression_with_cluster_robust_test(
-        df, feature_set, outcome_var, user_id_var, significance_level, n_jobs=n_jobs
-    )
+    # Sort and select top N
+    df = df.sort_values(sort_by, key=abs, ascending=False).head(top_n)
     
-    if len(ols_results) == 0 and len(logit_results) == 0:
-        return pd.DataFrame()
+    # Select and rename columns for readability
+    summary_cols = {
+        'feature': 'Feature',
+        'feature_type': 'Type',
+        'n_wonky': 'N (wonky)',
+        'n_non_wonky': 'N (non-wonky)',
+        'wonky_mean': 'Mean (wonky)',
+        'non_wonky_mean': 'Mean (non-wonky)',
+        'ols_coefficient': 'OLS Coef',
+        'ols_p_value': 'OLS p-value',
+        'ols_stars': '',
+        'cohens_d': "Cohen's d",
+        'ols_interpretation': 'OLS Interpretation',
+        'odds_ratio': 'Odds Ratio',
+        'or_ci_lower': 'OR CI Lower',
+        'or_ci_upper': 'OR CI Upper',
+        'logit_p_value': 'LR p-value',
+        'logit_stars': '',
+        'lr_interpretation': 'LR Interpretation',
+        'significant_both': 'Sig. Both',
+    }
     
-    # Prefix columns
-    if len(ols_results) > 0:
-        ols_results = ols_results.add_prefix('ols_')
-    if len(logit_results) > 0:
-        logit_results = logit_results.add_prefix('logit_')
+    available = [c for c in summary_cols.keys() if c in df.columns]
+    summary = df[available].copy()
+    summary.columns = [summary_cols[c] for c in available]
     
-    # Merge
-    if len(ols_results) > 0 and len(logit_results) > 0:
-        combined = ols_results.join(logit_results, how='outer')
-    elif len(ols_results) > 0:
-        combined = ols_results
-    else:
-        combined = logit_results
-    
-    # Add summary columns
-    if 'ols_significant' in combined.columns and 'logit_significant' in combined.columns:
-        combined['significant_both'] = combined['ols_significant'] & combined['logit_significant']
-        combined['significant_either'] = combined['ols_significant'] | combined['logit_significant']
-    
-    if 'ols_t_statistic' in combined.columns:
-        combined = combined.sort_values('ols_t_statistic', key=abs, ascending=False)
-
-    return combined
-
-
-# =============================================================================
-# REPORT FORMATTING FUNCTIONS
-# =============================================================================
-
-def format_ols_for_report(
-    ols_results: pd.DataFrame,
-    baseline_mean: float,
-    confidence_level: float = 0.95,
-    significance_level: float = 0.05,
-) -> pd.DataFrame:
-    """
-    Format OLS results with report-friendly interpretations.
-
-    Parameters
-    ----------
-    ols_results : pd.DataFrame
-        Output from OLS_with_cluster_robust_test() or run_combined_regression_tests()
-        Handles both prefixed (ols_*) and non-prefixed column names
-    baseline_mean : float
-        Mean of outcome variable (for percentage calculations)
-    confidence_level : float
-        Confidence level for intervals (default 0.95)
-    significance_level : float
-        Threshold for significance stars
-
-    Returns
-    -------
-    pd.DataFrame with columns:
-        - feature: Feature name
-        - ols_mean_difference: Raw coefficient value
-        - ci_lower, ci_upper: Confidence interval bounds
-        - ci_95: "coef [lower, upper]" string
-        - pct_change: Coefficient as % of baseline
-        - ols_p_value: Raw p-value
-        - significance: Stars (*** / ** / *)
-        - interpretation: Plain English description
-        - impact_category: HIGH/MEDIUM/LOW/NOT SIGNIFICANT
-    """
-    from scipy import stats
-
-    results = ols_results.reset_index() if 'feature' not in ols_results.columns else ols_results.copy()
-
-    # Handle both prefixed (from run_combined_regression_tests) and non-prefixed column names
-    # Map to standardized names for processing
-    col_map = {}
-    if 'ols_mean_difference' in results.columns:
-        col_map['mean_diff'] = 'ols_mean_difference'
-        col_map['se'] = 'ols_se_cluster_robust'
-        col_map['p_value'] = 'ols_p_value'
-        col_map['cohens_d'] = 'ols_cohens_d'
-    elif 'mean_difference' in results.columns:
-        col_map['mean_diff'] = 'mean_difference'
-        col_map['se'] = 'se_cluster_robust'
-        col_map['p_value'] = 'p_value'
-        col_map['cohens_d'] = 'cohens_d'
-    else:
-        raise KeyError(
-            f"Expected 'mean_difference' or 'ols_mean_difference' column. "
-            f"Available columns: {list(results.columns)}"
-        )
-
-    mean_diff_col = col_map['mean_diff']
-    se_col = col_map['se']
-    p_value_col = col_map['p_value']
-    cohens_d_col = col_map['cohens_d']
-
-    # Calculate confidence intervals
-    z_crit = stats.norm.ppf((1 + confidence_level) / 2)
-    if se_col in results.columns:
-        results['ci_lower'] = results[mean_diff_col] - z_crit * results[se_col]
-        results['ci_upper'] = results[mean_diff_col] + z_crit * results[se_col]
-    else:
-        results['ci_lower'] = np.nan
-        results['ci_upper'] = np.nan
-
-    # Formatted CI string
-    results['ci_95'] = results.apply(
-        lambda r: f"{r[mean_diff_col]:+.3f} [{r['ci_lower']:+.3f}, {r['ci_upper']:+.3f}]"
-        if pd.notna(r['ci_lower']) else f"{r[mean_diff_col]:+.3f}",
-        axis=1
-    )
-
-    # Percentage change from baseline
-    if baseline_mean != 0:
-        results['pct_change'] = (results[mean_diff_col] / baseline_mean * 100).round(1)
-    else:
-        results['pct_change'] = np.nan
-
-    # Significance stars
-    def get_stars(p):
-        if pd.isna(p):
-            return ''
-        if p < 0.001:
-            return '***'
-        elif p < 0.01:
-            return '**'
-        elif p < 0.05:
-            return '*'
-        return ''
-
-    results['significance'] = results[p_value_col].apply(get_stars)
-
-    # Plain English interpretation
-    def interpret_coefficient(row):
-        p_val = row[p_value_col]
-        if pd.isna(p_val) or p_val >= significance_level:
-            return "No significant effect"
-
-        coef = row[mean_diff_col]
-        pct = row['pct_change'] if pd.notna(row['pct_change']) else 0
-
-        if coef > 0:
-            return f"Increases wonkiness by {abs(pct):.0f}%"
-        else:
-            return f"Decreases wonkiness by {abs(pct):.0f}%"
-
-    results['interpretation'] = results.apply(interpret_coefficient, axis=1)
-
-    # Impact category based on Cohen's d
-    def categorize_impact(row):
-        p_val = row[p_value_col]
-        if pd.isna(p_val) or p_val >= significance_level:
-            return "NOT SIGNIFICANT"
-        d = abs(row.get(cohens_d_col, 0)) if cohens_d_col in row else 0
-        if pd.isna(d):
-            d = 0
-        if d >= 0.8:
-            return "HIGH"
-        elif d >= 0.5:
-            return "MEDIUM"
-        elif d >= 0.2:
-            return "LOW"
-        return "NEGLIGIBLE"
-
-    results['impact_category'] = results.apply(categorize_impact, axis=1)
-
-    # Select and reorder columns - include the original column names
-    output_cols = [
-        'feature', mean_diff_col, 'ci_lower', 'ci_upper', 'ci_95',
-        'pct_change', p_value_col, 'significance', 'interpretation', 'impact_category'
-    ]
-    available_cols = [c for c in output_cols if c in results.columns]
-
-    return results[available_cols].sort_values(mean_diff_col, key=abs, ascending=False)
-
-
-def format_odds_ratios_for_report(
-    logit_results: pd.DataFrame,
-    significance_level: float = 0.05,
-) -> pd.DataFrame:
-    """
-    Format odds ratios with report-friendly interpretations.
-
-    Parameters
-    ----------
-    logit_results : pd.DataFrame
-        Output from logistic_regression_with_cluster_robust_test() or run_combined_regression_tests()
-        Handles both prefixed (logit_*) and non-prefixed column names
-    significance_level : float
-        Threshold for significance
-
-    Returns
-    -------
-    pd.DataFrame with columns:
-        - feature: Feature name
-        - logit_odds_ratio: Raw OR value
-        - or_formatted: "OR [CI lower, CI upper]" string
-        - interpretation: Plain English (e.g., "50% more likely")
-        - logit_p_value: Raw p-value
-        - significance: Stars
-        - impact_category: HIGH/MEDIUM/LOW/NOT SIGNIFICANT
-        - direction: "Risk Factor" / "Protective Factor" / "Neutral"
-    """
-    results = logit_results.reset_index() if 'feature' not in logit_results.columns else logit_results.copy()
-
-    # Handle both prefixed (from run_combined_regression_tests) and non-prefixed column names
-    col_map = {}
-    if 'logit_odds_ratio' in results.columns:
-        col_map['or'] = 'logit_odds_ratio'
-        col_map['p_value'] = 'logit_p_value'
-        col_map['or_ci_lower'] = 'logit_or_ci_lower'
-        col_map['or_ci_upper'] = 'logit_or_ci_upper'
-    elif 'odds_ratio' in results.columns:
-        col_map['or'] = 'odds_ratio'
-        col_map['p_value'] = 'p_value'
-        col_map['or_ci_lower'] = 'or_ci_lower'
-        col_map['or_ci_upper'] = 'or_ci_upper'
-    else:
-        raise KeyError(
-            f"Expected 'odds_ratio' or 'logit_odds_ratio' column. "
-            f"Available columns: {list(results.columns)}"
-        )
-
-    or_col = col_map['or']
-    p_value_col = col_map['p_value']
-    ci_lower_col = col_map['or_ci_lower']
-    ci_upper_col = col_map['or_ci_upper']
-
-    # Formatted OR with CI
-    if ci_lower_col in results.columns and ci_upper_col in results.columns:
-        results['or_formatted'] = results.apply(
-            lambda r: f"{r[or_col]:.2f} [{r[ci_lower_col]:.2f}, {r[ci_upper_col]:.2f}]"
-            if pd.notna(r.get(ci_lower_col)) else f"{r[or_col]:.2f}",
-            axis=1
-        )
-    else:
-        results['or_formatted'] = results[or_col].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A")
-
-    # Significance stars
-    def get_stars(p):
-        if pd.isna(p):
-            return ''
-        if p < 0.001:
-            return '***'
-        elif p < 0.01:
-            return '**'
-        elif p < 0.05:
-            return '*'
-        return ''
-
-    results['significance'] = results[p_value_col].apply(get_stars)
-
-    # Plain English interpretation
-    def interpret_or(row):
-        or_val = row[or_col]
-        p_val = row[p_value_col]
-
-        if pd.isna(p_val) or p_val >= significance_level:
-            return "No significant effect"
-
-        if pd.isna(or_val) or or_val <= 0:
-            return "Invalid"
-
-        if or_val > 100 or or_val < 0.01:
-            return "Extreme value - interpret with caution"
-
-        if abs(or_val - 1) < 0.05:
-            return "No practical effect"
-
-        if or_val > 1:
-            pct = (or_val - 1) * 100
-            if pct > 100:
-                return f"{or_val:.1f}x more likely to be flagged"
-            return f"{pct:.0f}% more likely to be flagged"
-        else:
-            pct = (1 - or_val) * 100
-            return f"{pct:.0f}% less likely to be flagged"
-
-    results['interpretation'] = results.apply(interpret_or, axis=1)
-
-    # Impact category based on OR magnitude
-    def categorize_impact(row):
-        p_val = row[p_value_col]
-        if pd.isna(p_val) or p_val >= significance_level:
-            return "NOT SIGNIFICANT"
-
-        or_val = row[or_col]
-        if pd.isna(or_val) or or_val <= 0:
-            return "INVALID"
-
-        # Use max(OR, 1/OR) for symmetric interpretation
-        or_effect = max(or_val, 1/or_val) if or_val > 0 else 1
-
-        if or_effect >= 4.0:
-            return "HIGH"
-        elif or_effect >= 2.5:
-            return "MEDIUM"
-        elif or_effect >= 1.5:
-            return "LOW"
-        return "NEGLIGIBLE"
-
-    results['impact_category'] = results.apply(categorize_impact, axis=1)
-
-    # Direction classification
-    def classify_direction(row):
-        p_val = row[p_value_col]
-        if pd.isna(p_val) or p_val >= significance_level:
-            return "Neutral"
-        or_val = row[or_col]
-        if pd.isna(or_val):
-            return "Unknown"
-        if or_val > 1.05:
-            return "Risk Factor"
-        elif or_val < 0.95:
-            return "Protective Factor"
-        return "Neutral"
-
-    results['direction'] = results.apply(classify_direction, axis=1)
-
-    # Select and reorder columns - use the actual column names from the input
-    output_cols = [
-        'feature', or_col, 'or_formatted', 'interpretation',
-        p_value_col, 'significance', 'impact_category', 'direction'
-    ]
-    available_cols = [c for c in output_cols if c in results.columns]
-
-    return results[available_cols].sort_values(or_col, key=lambda x: abs(np.log(x)), ascending=False)
-
-
-def generate_testing_executive_summary(
-    combined_results: pd.DataFrame,
-    significance_level: float = 0.05,
-) -> str:
-    """
-    Generate executive summary of statistical testing results.
-
-    Parameters
-    ----------
-    combined_results : pd.DataFrame
-        Output from run_combined_regression_tests()
-    significance_level : float
-        Threshold for significance
-
-    Returns
-    -------
-    str
-        Formatted executive summary
-    """
-    results = combined_results.reset_index() if combined_results.index.name else combined_results.copy()
-
-    summary_parts = []
-
-    # Header
-    summary_parts.append("=" * 70)
-    summary_parts.append("EXECUTIVE SUMMARY: Statistical Testing Results")
-    summary_parts.append("=" * 70)
-
-    # Overview
-    n_features = len(results)
-    n_sig_ols = (results['ols_significant'] == True).sum() if 'ols_significant' in results.columns else 0
-    n_sig_logit = (results['logit_significant'] == True).sum() if 'logit_significant' in results.columns else 0
-    n_sig_both = (results['significant_both'] == True).sum() if 'significant_both' in results.columns else 0
-
-    summary_parts.append(f"\nOVERVIEW:")
-    summary_parts.append(f"  Total features tested: {n_features}")
-    summary_parts.append(f"  Significant in OLS: {n_sig_ols} ({n_sig_ols/n_features*100:.1f}%)")
-    summary_parts.append(f"  Significant in Logistic: {n_sig_logit} ({n_sig_logit/n_features*100:.1f}%)")
-    summary_parts.append(f"  Significant in BOTH (high confidence): {n_sig_both}")
-
-    # Top Risk Factors
-    summary_parts.append("\n" + "-" * 50)
-    summary_parts.append("TOP 5 RISK FACTORS (Increase Likelihood of Flagging)")
-    summary_parts.append("-" * 50)
-
-    if 'logit_odds_ratio' in results.columns and 'logit_significant' in results.columns:
-        sig_results = results[results['logit_significant'] == True]
-        top_risk = sig_results[sig_results['logit_odds_ratio'] > 1].nlargest(5, 'logit_odds_ratio')
-
-        for i, (_, row) in enumerate(top_risk.iterrows(), 1):
-            or_val = row['logit_odds_ratio']
-            pct = (or_val - 1) * 100
-            feature = row['feature'] if 'feature' in row else row.name
-            summary_parts.append(
-                f"  {i}. {feature}: {pct:.0f}% more likely (OR={or_val:.2f}, p={row['logit_p_value']:.4f})"
-            )
-
-    # Top Protective Factors
-    summary_parts.append("\n" + "-" * 50)
-    summary_parts.append("TOP 5 PROTECTIVE FACTORS (Decrease Likelihood)")
-    summary_parts.append("-" * 50)
-
-    if 'logit_odds_ratio' in results.columns and 'logit_significant' in results.columns:
-        sig_results = results[results['logit_significant'] == True]
-        top_protective = sig_results[sig_results['logit_odds_ratio'] < 1].nsmallest(5, 'logit_odds_ratio')
-
-        for i, (_, row) in enumerate(top_protective.iterrows(), 1):
-            or_val = row['logit_odds_ratio']
-            pct = (1 - or_val) * 100
-            feature = row['feature'] if 'feature' in row else row.name
-            summary_parts.append(
-                f"  {i}. {feature}: {pct:.0f}% less likely (OR={or_val:.2f}, p={row['logit_p_value']:.4f})"
-            )
-
-    # Key Takeaways
-    summary_parts.append("\n" + "-" * 50)
-    summary_parts.append("KEY TAKEAWAYS")
-    summary_parts.append("-" * 50)
-
-    if n_sig_both > 0:
-        summary_parts.append(f"  - {n_sig_both} features show consistent effects across both models")
-        summary_parts.append("  - These high-confidence features should be prioritized for intervention")
-
-    if 'logit_odds_ratio' in results.columns:
-        high_impact = results[
-            (results.get('logit_significant', False) == True) &
-            ((results['logit_odds_ratio'] >= 2.0) | (results['logit_odds_ratio'] <= 0.5))
-        ]
-        if len(high_impact) > 0:
-            summary_parts.append(f"  - {len(high_impact)} features have HIGH practical impact (OR >= 2.0 or <= 0.5)")
-
-    summary_parts.append("\n" + "=" * 70)
-
-    return "\n".join(summary_parts)
+    return summary

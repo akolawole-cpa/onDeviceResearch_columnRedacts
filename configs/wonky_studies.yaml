@@ -1,7 +1,7 @@
 # Wonky Studies Configuration
 
 # List of wonky study UUIDs
-wonky_study_uuids:
+wonky_study_uuids_updated:
   "d68829df-579a-4560-b303-a7438660f421": false
   "ea2c73f9-a11a-4f52-a48c-6276544659c8": false
   "ef945e3c-f144-4048-bddc-925fb0989dfc": false
@@ -108,6 +108,7 @@ cols_to_include_subset:
   - "request-remote-addr"
   - "user-agent"
   - "exposure_band"
+  - "survey_type"
 
 # Columns to group by for aggregation
 cols_to_group:
@@ -120,6 +121,7 @@ cols_to_group:
   - "request-remote-addr"
   - "user-agent"
   - "exposure_band"
+  - "survey_type"
   - "task_pk"
   - "task_origin_id"
   - "task_length_of_task"

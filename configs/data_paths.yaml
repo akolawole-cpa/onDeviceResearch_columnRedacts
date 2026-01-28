@@ -21,12 +21,15 @@ tables:
 output_files:
   user_info_df: "dbfs:/FileStore/misc/user_info_df_pullcomplete.parquet"
   user_info_df_post_eda: "dbfs:/FileStore/misc/user_info_df_post_eda.parquet"
-  wonky_user_counts: "dbfs:/FileStore/misc/wonky_user_counts_pullcomplete.parquet"
-  wonky_respondent_df: "dbfs:/FileStore/misc/wonky_respondent_df_pullcomplete.parquet"
-  wonky_respondent_summary: "dbfs:/FileStore/misc/wonky_summary_pullcomplete.parquet"
-  respondent_features: "dbfs:/FileStore/misc/respondent_features_eda.parquet"
-  wonky_map: "dbfs:/FileStore/misc/wonky_map.parquet"
-  test_results_df: "dbfs:/FileStore/misc/testing_df.parquet"
+  # wonky_user_counts: "dbfs:/FileStore/misc/wonky_user_counts_pullcomplete.parquet"
+  # wonky_respondent_df: "dbfs:/FileStore/misc/wonky_respondent_df_pullcomplete.parquet"
+  # wonky_respondent_summary: "dbfs:/FileStore/misc/wonky_summary_pullcomplete.parquet"
+  # respondent_features: "dbfs:/FileStore/misc/respondent_features_eda.parquet"
+  # wonky_map: "dbfs:/FileStore/misc/wonky_map.parquet"
+  test_results_df: "dbfs:/FileStore/misc/testing_df.csv"
+  feature_summary: "dbfs:/FileStore/misc/feature_summary.csv"
+  interactions: "dbfs:/FileStore/misc/feature_interactions.csv"
+
 
 # Data filters
 filters:

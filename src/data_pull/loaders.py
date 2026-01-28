@@ -233,7 +233,12 @@ def load_wonky_study_balance(
             f"{base_path}/{uuid}/final-data/balance"
         )
         
-        balance_subset = balance.filter(col("match_id_type") == "respondent_pk")
+        if "match_id_type" in balance.columns:
+            balance_subset = balance.filter(col("match_id_type") == "respondent_pk")
+        else:
+            # Add placeholder column and keep all rows
+            print(f"INFO: UUID {uuid} has no 'match_id_type' column - adding placeholder")
+            balance_subset = balance.withColumn("match_id_type", lit("temp_match_id"))
         
         if cols_to_include:
             available_cols = [c for c in cols_to_include if c in balance_subset.columns]

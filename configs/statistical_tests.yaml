@@ -4,6 +4,7 @@ feature_sets:
 
   tasks_completed:
     - task_completed
+    - task_completed_PWABTC
     - total_tasks_1_10
     - total_tasks_11_25
     - total_tasks_26_75
@@ -12,7 +13,6 @@ feature_sets:
     - total_tasks_176_225
     - total_tasks_226_plus
 
-  # Cumulative bins (overlapping)
   # days_active_cumulative:
     # - days_active_<2
     # - days_active_<10
@@ -27,9 +27,7 @@ feature_sets:
     # - days_active_<250
     # - days_active_>=250
 
-# Mutually exclusive bins
   days_active_exclusive:
-    - days_active_before_task
     - days_active_0_to_2
     - days_active_3_to_10
     - days_active_11_to_20
@@ -42,6 +40,11 @@ feature_sets:
     - days_active_151_to_200
     - days_active_201_to_250
     - days_active_251_plus
+
+  days_active_numeric:
+    - days_active_before_task
+    - days_active_before_task_div_mean
+    - weeks_active_before_task
 
   temporal_day_of_week:
     - is_weekend
@@ -101,6 +104,8 @@ feature_sets:
 
   quality:
     - quality
+    - quality_diff_from_max
+    - quality_stretched
     - quality_round10_0
     - quality_round10_20
     - quality_round10_30
@@ -114,6 +119,8 @@ feature_sets:
 
   risk:
     - risk
+    - risk_diff_from_min
+    - risk_stretched
     - risk_round10_0
     - risk_round10_20,
     - risk_round10_30,
@@ -419,113 +426,3 @@ feature_sets:
 
   misc:
     - age_YOB
-
-
-# test_settings:
-#   significance_level: 0.05
-#   bonferroni_correction: true
-#   outcome_var: "wonky_study_count"
-#   user_id_var: "respondentPk"
-#   min_sample_size: 30
-
-# feature_groups:
-#   behavioral:
-#     - tasks_completed
-#     - days_active_cumulative
-#     - days_active_exclusive
-#     - task_speed
-#     - entry_point
-
-#   temporal:
-#     - temporal_day_of_week
-#     - temporal_business_hours
-#     - temporal_time_of_day
-
-#   demographic:
-#     - gender
-#     - income
-#     - region
-#     - employer_industry
-#     - employer_department
-
-#   platform:
-#     - platform
-#     - device
-#     - hardware_category      # Updated from 'hardware'
-#     - manufacturer_category  # NEW
-#     - ditr_os
-
-#   user_settings:
-#     - email_verification
-#     - share_location_data
-#     - notify_new_task
-#     - notify_task_payout
-
-#   quality_risk:
-#     - quality
-#     - risk
-
-#   experimental:
-#     - exposure
-
-# =============================================================================
-# FEATURE REMOVAL CONFIGURATION
-# =============================================================================
-# Features to remove before modelling due to known collinearity issues
-
-feature_removal:
-  # Features that cause perfect multicollinearity (must remove)
-  collinear_features:
-    - is_weekend        # Redundant: = is_saturday + is_sunday
-    - is_business_hour  # Redundant: combination of weekday/weekend versions
-
-  # Additional features to exclude from modelling (domain knowledge)
-  exclude_from_modelling: []
-
-# =============================================================================
-# EFFECT SIZE THRESHOLDS
-# =============================================================================
-# Used for interpreting practical significance of results
-
-effect_size_thresholds:
-  # Cohen's d thresholds for OLS regression (continuous outcome)
-  # Reference: Cohen (1988) "Statistical Power Analysis"
-  cohens_d:
-    negligible: 0.2   # |d| < 0.2
-    small: 0.5        # 0.2 <= |d| < 0.5
-    medium: 0.8       # 0.5 <= |d| < 0.8
-    large: 0.8        # |d| >= 0.8
-
-  # Odds Ratio thresholds for logistic regression
-  # Reference: Chen et al. (2010) "A unified approach to interpreting model predictions"
-  # Thresholds use max(OR, 1/OR) for symmetric interpretation
-  odds_ratio:
-    negligible: 1.5   # 0.67 < OR < 1.5
-    small: 2.5        # 0.4 < OR <= 0.67 or 1.5 <= OR < 2.5
-    medium: 4.0       # 0.25 < OR <= 0.4 or 2.5 <= OR < 4.0
-    large: 4.0        # OR <= 0.25 or OR >= 4.0
-
-# =============================================================================
-# INTERPRETATION GUIDE FOR STAKEHOLDERS
-# =============================================================================
-#
-# OLS COEFFICIENTS (ols_mean_difference):
-#   - Positive coefficient: Feature INCREASES wonky_study_count
-#   - Negative coefficient: Feature DECREASES wonky_study_count
-#   - Example: coef = +0.5 means "respondents with this feature have 0.5 more
-#     wonky studies on average compared to those without"
-#
-# ODDS RATIOS (logit_odds_ratio):
-#   - OR > 1: Feature INCREASES likelihood of being flagged
-#   - OR < 1: Feature DECREASES likelihood of being flagged
-#   - OR = 1: No effect
-#   - Example: OR = 2.0 means "respondents with this feature are 2x more likely
-#     to have any wonky studies"
-#   - Example: OR = 0.5 means "respondents with this feature are 50% less likely
-#     to have any wonky studies"
-#
-# P-VALUES:
-#   - p < 0.001 (***): Very strong evidence
-#   - p < 0.01 (**):   Strong evidence
-#   - p < 0.05 (*):    Moderate evidence
-#   - p >= 0.05:       Insufficient evidence (not significant)
