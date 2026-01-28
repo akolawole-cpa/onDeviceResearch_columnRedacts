@@ -1,576 +1,379 @@
 """
-Modelling Module
+Modelling Module - Random Forest with SHAP Analysis
 
-Core model building functions for feature importance analysis.
-Contains: Linear Regression, Logistic Regression, Random Forest
-
-Usage:
-    from modelling.modelling import (
-        build_linear_baseline,
-        build_logistic_regression_model,
-        build_random_forest_model,
-        run_all_models,
-    )
+Core model building functions focused on:
+- Random Forest with GroupKFold CV
+- SHAP feature importance and interactions
+- Optional grid search for hyperparameter tuning
 """
 
 import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import GroupKFold
-from sklearn.metrics import (
-    mean_squared_error, r2_score, mean_absolute_error,
-    accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-)
-import statsmodels.api as sm
-from statsmodels.stats.outliers_influence import variance_inflation_factor
+from sklearn.model_selection import GroupKFold, GridSearchCV
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from typing import List, Dict, Tuple, Any, Optional
-
+import shap
 import warnings
-warnings.filterwarnings('ignore')
+
+warnings.filterwarnings("ignore")
 
 
 # =============================================================================
-# LINEAR REGRESSION
+# RANDOM FOREST MODEL
 # =============================================================================
 
-def build_linear_baseline(
-    df: pd.DataFrame,
-    feature_cols: List[str],
-    outcome_var: str,
-    user_id_var: str,
-    calculate_vif: bool = True,
-) -> Tuple[Any, pd.DataFrame, pd.DataFrame]:
-    """
-    Build Linear OLS Regression with VIF diagnostics.
-    
-    Parameters:
-    -----------
-    df : pd.DataFrame
-        DataFrame with features and outcome
-    feature_cols : List[str]
-        List of feature column names
-    outcome_var : str
-        Target variable name
-    user_id_var : str
-        User identifier (for info only, not used in basic OLS)
-    calculate_vif : bool
-        Whether to calculate VIF (can be slow for many features)
-    
-    Returns:
-    --------
-    Tuple of (model, importance_df, vif_df)
-        - model: fitted statsmodels OLS model
-        - importance_df: DataFrame with coefficients, p-values, importance
-        - vif_df: DataFrame with VIF for each feature
-    """
-    print("\n" + "="*70)
-    print("LINEAR REGRESSION (OLS)")
-    print("="*70)
-    
-    X = df[feature_cols].copy()
-    y = df[outcome_var].copy()
-    
-    # Handle missing values
-    mask = X.notna().all(axis=1) & y.notna()
-    X = X[mask].reset_index(drop=True)
-    y = y[mask].reset_index(drop=True)
-    
-    print(f"\nObservations: {len(y)}")
-    print(f"Features: {len(feature_cols)}")
-    
-    # VIF calculation (optional - can be slow)
-    vif_data = pd.DataFrame({'feature': feature_cols, 'VIF': np.nan})
-    
-    if calculate_vif:
-        print("\nCalculating VIF (multicollinearity check)...")
-        try:
-            vif_values = [variance_inflation_factor(X.values, i) for i in range(len(feature_cols))]
-            vif_data = pd.DataFrame({
-                'feature': feature_cols,
-                'VIF': vif_values
-            })
-            vif_data = vif_data.sort_values('VIF', ascending=False)
-            
-            high_vif = vif_data[vif_data['VIF'] > 10]
-            if len(high_vif) > 0:
-                print(f"⚠️  {len(high_vif)} features with VIF > 10 (multicollinearity)")
-            else:
-                print("✓ No severe multicollinearity (all VIF < 10)")
-        except Exception as e:
-            print(f"⚠️  VIF calculation failed: {e}")
-    
-    # Fit OLS model
-    X_with_const = sm.add_constant(X)
-    model = sm.OLS(y, X_with_const).fit()
-    
-    print(f"\nModel Performance:")
-    print(f"  R²: {model.rsquared:.4f}")
-    print(f"  Adj R²: {model.rsquared_adj:.4f}")
-    print(f"  F-statistic p-value: {model.f_pvalue:.4e}")
-    
-    # Extract coefficients
-    importance_df = pd.DataFrame({
-        'feature': feature_cols,
-        'coefficient': model.params[1:].values,
-        'std_error': model.bse[1:].values,
-        'p_value': model.pvalues[1:].values,
-        't_stat': model.tvalues[1:].values,
-    })
-    
-    # Calculate importance (absolute coefficient)
-    importance_df['importance'] = importance_df['coefficient'].abs()
-    importance_df = importance_df.sort_values('importance', ascending=False)
-    
-    # Count significant features
-    sig_count = (importance_df['p_value'] < 0.05).sum()
-    print(f"  Significant features (p < 0.05): {sig_count}/{len(feature_cols)}")
-    
-    print("\nTop 10 Features (by |coefficient|):")
-    print(importance_df.head(10)[['feature', 'coefficient', 'p_value']].to_string(index=False))
-    
-    return model, importance_df, vif_data
 
-
-# =============================================================================
-# RANDOM FOREST
-# =============================================================================
-
-def build_random_forest_model(
+def build_random_forest(
     df: pd.DataFrame,
     feature_cols: List[str],
     outcome_var: str,
     user_id_var: str,
     n_estimators: int = 100,
     max_depth: int = 10,
+    max_features: Optional[Any] = None,
     n_splits: int = 5,
-) -> Tuple[Any, pd.DataFrame, Dict[str, List[float]]]:
+    do_gridsearch: bool = False,
+    param_grid: Optional[Dict] = None,
+) -> Tuple[Any, pd.DataFrame, Dict, pd.DataFrame]:
     """
     Build Random Forest with cluster-aware cross-validation.
-    
-    Parameters:
-    -----------
-    df : pd.DataFrame
-        DataFrame with features and outcome
-    feature_cols : List[str]
-        List of feature column names
-    outcome_var : str
-        Target variable name
-    user_id_var : str
-        User identifier for GroupKFold
-    n_estimators : int
-        Number of trees
-    max_depth : int
-        Maximum tree depth
-    n_splits : int
-        Number of CV folds
-    
+
     Returns:
     --------
-    Tuple of (model, importance_df, cv_scores)
-        - model: fitted RandomForest model (best fold)
-        - importance_df: DataFrame with feature importances
-        - cv_scores: Dict with CV metrics per fold
+    Tuple of (model, X_data, cv_metrics, importance_df)
     """
-    print("\n" + "="*70)
-    print("RANDOM FOREST")
-    print("="*70)
+    print("=" * 60)
+    print("RANDOM FOREST MODEL")
+    print("=" * 60)
 
+    # Prepare data
     X = df[feature_cols].copy()
     y = df[outcome_var].copy()
     groups = df[user_id_var].copy()
 
-    # Handle missing values
     mask = X.notna().all(axis=1) & y.notna() & groups.notna()
     X = X[mask].reset_index(drop=True)
     y = y[mask].reset_index(drop=True)
     groups = groups[mask].reset_index(drop=True)
 
-    print(f"\nObservations: {len(y)}")
-    print(f"Unique users: {groups.nunique()}")
+    print(f"\nObservations: {len(y):,}")
+    print(f"Unique users: {groups.nunique():,}")
     print(f"Features: {len(feature_cols)}")
 
+    # Grid search (optional)
+    if do_gridsearch:
+        print("\n🔍 Running Grid Search...")
+        if param_grid is None:
+            print("SET THE PARAM_GRID!!!")
+
+        base_rf = RandomForestRegressor(
+            min_samples_split=2, min_samples_leaf=1, random_state=42, n_jobs=-1
+        )
+        gkf = GroupKFold(n_splits=n_splits)
+        cv_splits = list(gkf.split(X, y, groups))
+
+        grid_search = GridSearchCV(
+            base_rf, param_grid, cv=cv_splits, scoring="r2", n_jobs=1, verbose=1
+        )
+        grid_search.fit(X, y)
+
+        best_params = grid_search.best_params_
+        print(f"✓ Best params: {best_params}")
+        print(f"  Best CV R²: {grid_search.best_score_:.4f}")
+
+        n_estimators = best_params.get("n_estimators", n_estimators)
+        max_depth = best_params.get("max_depth", max_depth)
+        max_features = best_params.get("max_features", max_features)
+    else:
+        print(
+            f"Using default params: n_estimators={n_estimators}, max_depth={max_depth}, max_features={max_features}"
+        )
+
     # Cross-validation
-    print(f"\nRunning {n_splits}-fold cluster-based CV...")
+    print(f"\nRunning {n_splits}-fold CV...")
     gkf = GroupKFold(n_splits=n_splits)
-    
-    cv_scores = {
-        'train_r2': [], 'test_r2': [], 
-        'test_mse': [], 'test_mae': []
-    }
+
+    cv_metrics = {"train_r2": [], "test_r2": [], "test_rmse": [], "test_mae": []}
     fold_models = []
+
+    rf_params = {
+        "n_estimators": n_estimators,
+        "max_depth": max_depth,
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "random_state": 42,
+        "n_jobs": -1,
+    }
+    if max_features:
+        rf_params["max_features"] = max_features
 
     for fold, (train_idx, test_idx) in enumerate(gkf.split(X, y, groups), 1):
         X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
         y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
-        rf_fold = RandomForestRegressor(
-            n_estimators=n_estimators,
-            max_depth=max_depth,
-            min_samples_split=20,
-            min_samples_leaf=10,
-            random_state=42,
-            n_jobs=1
-        )
-        rf_fold.fit(X_train, y_train)
-        fold_models.append(rf_fold)
+        rf = RandomForestRegressor(**rf_params)
+        rf.fit(X_train, y_train)
+        fold_models.append(rf)
 
-        # Calculate metrics
-        train_r2 = r2_score(y_train, rf_fold.predict(X_train))
-        test_r2 = r2_score(y_test, rf_fold.predict(X_test))
-        test_mse = mean_squared_error(y_test, rf_fold.predict(X_test))
-        test_mae = mean_absolute_error(y_test, rf_fold.predict(X_test))
+        train_r2 = r2_score(y_train, rf.predict(X_train))
+        test_r2 = r2_score(y_test, rf.predict(X_test))
+        test_rmse = np.sqrt(mean_squared_error(y_test, rf.predict(X_test)))
+        test_mae = mean_absolute_error(y_test, rf.predict(X_test))
 
-        cv_scores['train_r2'].append(train_r2)
-        cv_scores['test_r2'].append(test_r2)
-        cv_scores['test_mse'].append(test_mse)
-        cv_scores['test_mae'].append(test_mae)
+        cv_metrics["train_r2"].append(train_r2)
+        cv_metrics["test_r2"].append(test_r2)
+        cv_metrics["test_rmse"].append(test_rmse)
+        cv_metrics["test_mae"].append(test_mae)
 
         print(f"  Fold {fold}: Test R²={test_r2:.4f}, Train R²={train_r2:.4f}")
+        print(f"  Fold {fold}: Test R²={test_rmse:.4f}, Train R²={train_r2:.4f}")
 
     # Summary
     print(f"\nCV Summary:")
-    print(f"  Test R²: {np.mean(cv_scores['test_r2']):.4f} ± {np.std(cv_scores['test_r2']):.4f}")
-    print(f"  Test RMSE: {np.sqrt(np.mean(cv_scores['test_mse'])):.4f}")
-    print(f"  Test MAE: {np.mean(cv_scores['test_mae']):.4f}")
-    
-    # Overfitting check
-    overfit_gap = np.mean(cv_scores['train_r2']) - np.mean(cv_scores['test_r2'])
-    if overfit_gap > 0.1:
-        print(f"  ⚠️ Possible overfitting (gap = {overfit_gap:.4f})")
-    else:
-        print(f"  ✓ Overfitting check OK (gap = {overfit_gap:.4f})")
+    print(
+        f"  Test R²:   {np.mean(cv_metrics['test_r2']):.4f} ± {np.std(cv_metrics['test_r2']):.4f}"
+    )
+    print(f"  Test RMSE: {np.mean(cv_metrics['test_rmse']):.4f}")
+    print(f"  Test MAE:  {np.mean(cv_metrics['test_mae']):.4f}")
 
-    # Use best fold model
-    best_idx = np.argmax(cv_scores['test_r2'])
-    rf_model = fold_models[best_idx]
-    print(f"\nUsing best fold model (Fold {best_idx + 1})")
+    overfit_gap = np.mean(cv_metrics["train_r2"]) - np.mean(cv_metrics["test_r2"])
+    status = "Possible overfitting" if overfit_gap > 0.1 else "OK"
+    print(f"  Overfit gap: {overfit_gap:.4f} ({status})")
 
-    # Feature importance
-    importance_df = pd.DataFrame({
-        'feature': feature_cols,
-        'rf_importance': rf_model.feature_importances_,
-    })
-    importance_df['rf_importance_pct'] = (importance_df['rf_importance'] * 100).round(2)
-    importance_df = importance_df.sort_values('rf_importance', ascending=False)
+    # Select best fold model
+    best_idx = np.argmax(cv_metrics["test_r2"])
+    best_model = fold_models[best_idx]
+    print(f"\n✓ Using best fold model (fold {best_idx + 1})")
 
-    print("\nTop 10 Features (by RF importance):")
-    print(importance_df.head(10)[['feature', 'rf_importance_pct']].to_string(index=False))
+    # Feature importance (MDI)
+    importance_df = pd.DataFrame(
+        {
+            "feature": feature_cols,
+            "rf_importance": best_model.feature_importances_,
+        }
+    )
+    importance_df["rf_importance_pct"] = importance_df["rf_importance"] * 100
+    importance_df = importance_df.sort_values("rf_importance", ascending=False)
 
-    return rf_model, importance_df, cv_scores
+    return best_model, X, cv_metrics, importance_df
 
 
 # =============================================================================
-# LOGISTIC REGRESSION
+# SHAP ANALYSIS
 # =============================================================================
 
-def build_logistic_regression_model(
-    df: pd.DataFrame,
-    feature_cols: List[str],
-    outcome_var: str,
-    user_id_var: str,
-    significance_level: float = 0.05,
-    regularization_C: float = 1.0,
-    n_splits: int = 5,
-) -> Tuple[Any, pd.DataFrame, Dict[str, List[float]]]:
+
+def compute_shap_values(
+    model: Any,
+    X: pd.DataFrame,
+    sample_size: int = 1000,
+) -> Tuple[shap.Explainer, np.ndarray, pd.DataFrame]:
     """
-    Build Logistic Regression with L2 regularization and cluster-aware CV.
-    
-    Uses sklearn LogisticRegression with regularization to prevent
-    coefficient explosion (infinite coefficients) from separation.
-    
-    Parameters:
-    -----------
-    df : pd.DataFrame
-        DataFrame with features and outcome
-    feature_cols : List[str]
-        List of feature column names
-    outcome_var : str
-        Target variable (will be binarized: >0 = 1)
-    user_id_var : str
-        User identifier for GroupKFold
-    significance_level : float
-        Alpha for significance testing
-    regularization_C : float
-        Inverse regularization strength (smaller = stronger regularization)
-    n_splits : int
-        Number of CV folds
-    
+    Compute SHAP values for feature importance interpretation.
+
     Returns:
     --------
-    Tuple of (model, importance_df, cv_scores)
-        - model: fitted LogisticRegression model
-        - importance_df: DataFrame with coefficients, odds ratios, p-values
-        - cv_scores: Dict with CV metrics per fold
+    Tuple of (explainer, shap_values, shap_importance_df)
     """
-    print("\n" + "="*70)
-    print("LOGISTIC REGRESSION (L2 Regularized)")
-    print("="*70)
+    print("\n" + "=" * 60)
+    print("SHAP ANALYSIS")
+    print("=" * 60)
 
-    X = df[feature_cols].copy()
-    y_raw = df[outcome_var].copy()
-    groups = df[user_id_var].copy()
+    # Sample if large dataset
+    if len(X) > sample_size:
+        print(f"Sampling {sample_size:,} observations for SHAP...")
+        X_sample = X.sample(n=sample_size, random_state=42)
+    else:
+        X_sample = X
 
-    # Binarize outcome
-    y = (y_raw.fillna(0) > 0).astype(int)
+    print(f"Computing SHAP values for {len(X_sample):,} observations...")
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X_sample)
 
-    # Handle missing values
-    mask = X.notna().all(axis=1) & y.notna() & groups.notna()
-    X = X[mask].reset_index(drop=True)
-    y = y[mask].reset_index(drop=True)
-    groups = groups[mask].reset_index(drop=True)
-
-    print(f"\nObservations: {len(y)}")
-    print(f"Unique users: {groups.nunique()}")
-    print(f"Positive class ({outcome_var} > 0): {y.sum()} ({y.mean()*100:.1f}%)")
-    print(f"Negative class: {(1-y).sum()} ({(1-y.mean())*100:.1f}%)")
-
-    # Scale features (important for logistic regression)
-    scaler = StandardScaler()
-    X_scaled = pd.DataFrame(scaler.fit_transform(X), columns=feature_cols)
-
-    # Fit model
-    print(f"\nFitting Logistic Regression (C={regularization_C})...")
-    lr_model = LogisticRegression(
-        penalty='l2',
-        C=regularization_C,
-        solver='lbfgs',
-        max_iter=1000,
-        random_state=42,
+    # Mean absolute SHAP importance
+    shap_importance = pd.DataFrame(
+        {
+            "feature": X.columns,
+            "shap_importance": np.abs(shap_values).mean(axis=0),
+        }
     )
-    lr_model.fit(X_scaled, y)
+    shap_importance["shap_importance_pct"] = (
+        shap_importance["shap_importance"]
+        / shap_importance["shap_importance"].sum()
+        * 100
+    )
+    shap_importance = shap_importance.sort_values("shap_importance", ascending=False)
 
-    # Cross-validation
-    print(f"\nRunning {n_splits}-fold cluster-based CV...")
-    gkf = GroupKFold(n_splits=n_splits)
-    
-    cv_scores = {
-        'accuracy': [], 'precision': [], 'recall': [],
-        'f1': [], 'auc': [], 'train_accuracy': []
-    }
+    print(f"\n✓ SHAP values computed")
+    print(f"\nTop 10 features by SHAP importance:")
+    print(shap_importance.head(10).to_string(index=False))
 
-    for fold, (train_idx, test_idx) in enumerate(gkf.split(X_scaled, y, groups), 1):
-        X_train, X_test = X_scaled.iloc[train_idx], X_scaled.iloc[test_idx]
-        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
-
-        fold_model = LogisticRegression(
-            penalty='l2', C=regularization_C, solver='lbfgs',
-            max_iter=1000, random_state=42
-        )
-        fold_model.fit(X_train, y_train)
-
-        y_train_pred = fold_model.predict(X_train)
-        y_test_pred = fold_model.predict(X_test)
-        y_test_prob = fold_model.predict_proba(X_test)[:, 1]
-
-        cv_scores['train_accuracy'].append(accuracy_score(y_train, y_train_pred))
-        cv_scores['accuracy'].append(accuracy_score(y_test, y_test_pred))
-        cv_scores['precision'].append(precision_score(y_test, y_test_pred, zero_division=0))
-        cv_scores['recall'].append(recall_score(y_test, y_test_pred, zero_division=0))
-        cv_scores['f1'].append(f1_score(y_test, y_test_pred, zero_division=0))
-        
-        try:
-            cv_scores['auc'].append(roc_auc_score(y_test, y_test_prob))
-        except:
-            cv_scores['auc'].append(np.nan)
-
-        print(f"  Fold {fold}: Acc={cv_scores['accuracy'][-1]:.4f}, AUC={cv_scores['auc'][-1]:.4f}")
-
-    # Summary
-    print(f"\nCV Summary:")
-    print(f"  Accuracy:  {np.mean(cv_scores['accuracy']):.4f} ± {np.std(cv_scores['accuracy']):.4f}")
-    print(f"  Precision: {np.mean(cv_scores['precision']):.4f} ± {np.std(cv_scores['precision']):.4f}")
-    print(f"  Recall:    {np.mean(cv_scores['recall']):.4f} ± {np.std(cv_scores['recall']):.4f}")
-    print(f"  F1:        {np.mean(cv_scores['f1']):.4f} ± {np.std(cv_scores['f1']):.4f}")
-    print(f"  AUC:       {np.nanmean(cv_scores['auc']):.4f} ± {np.nanstd(cv_scores['auc']):.4f}")
-
-    # Extract coefficients (adjusted for scaling)
-    raw_coefs = lr_model.coef_[0]
-    adjusted_coefs = raw_coefs / scaler.scale_  # Per-unit-of-original-feature
-    
-    importance_df = pd.DataFrame({
-        'feature': feature_cols,
-        'lr_coefficient': adjusted_coefs,
-        'lr_odds_ratio': np.exp(adjusted_coefs),
-    })
-    
-    # Approximate p-values using Wald test
-    try:
-        n = len(y)
-        y_prob = lr_model.predict_proba(X_scaled)[:, 1]
-        W = np.diag(y_prob * (1 - y_prob))
-        X_np = X_scaled.values
-        cov_matrix = np.linalg.inv(X_np.T @ W @ X_np)
-        std_errors = np.sqrt(np.diag(cov_matrix)) / scaler.scale_
-        z_scores = adjusted_coefs / std_errors
-        from scipy import stats
-        p_values = 2 * (1 - stats.norm.cdf(np.abs(z_scores)))
-    except:
-        std_errors = np.full(len(feature_cols), np.nan)
-        z_scores = np.full(len(feature_cols), np.nan)
-        p_values = np.full(len(feature_cols), np.nan)
-    
-    importance_df['lr_std_error'] = std_errors
-    importance_df['lr_z_stat'] = z_scores
-    importance_df['lr_p_value'] = p_values
-    importance_df['lr_significant'] = importance_df['lr_p_value'] < significance_level
-    importance_df['lr_importance'] = importance_df['lr_coefficient'].abs()
-    importance_df = importance_df.sort_values('lr_importance', ascending=False)
-
-    print("\nTop 10 Features (by |coefficient|):")
-    print(importance_df.head(10)[['feature', 'lr_coefficient', 'lr_odds_ratio']].to_string(index=False))
-
-    # Store scaler for later use
-    lr_model.scaler_ = scaler
-    
-    return lr_model, importance_df, cv_scores
+    return explainer, shap_values, shap_importance
 
 
-# =============================================================================
-# RUN ALL MODELS
-# =============================================================================
-
-def run_all_models(
-    df: pd.DataFrame,
-    feature_cols: List[str],
-    outcome_var: str = "wonky_study_count",
-    user_id_var: str = "respondentPk",
-    include_logistic: bool = True,
-    include_vif: bool = True,
-    rf_n_estimators: int = 100,
-    lr_regularization_C: float = 1.0,
-) -> Dict:
+def compute_shap_interactions(
+    explainer: shap.Explainer,
+    X: pd.DataFrame,
+    sample_size: int = 250,
+    top_n: int = 20,
+) -> Tuple[np.ndarray, pd.DataFrame]:
     """
-    Run all models and create unified comparison table.
-    
-    This is the main entry point for the modelling pipeline.
-    Runs Linear, Random Forest, and optionally Logistic regression,
-    then creates a comparison table with rankings.
-    
-    Parameters:
-    -----------
-    df : pd.DataFrame
-        DataFrame with features and outcome
-    feature_cols : List[str]
-        List of feature column names
-    outcome_var : str
-        Target variable name
-    user_id_var : str
-        User identifier for clustering
-    include_logistic : bool
-        Whether to include logistic regression
-    include_vif : bool
-        Whether to calculate VIF
-    rf_n_estimators : int
-        Number of trees for Random Forest
-    lr_regularization_C : float
-        Regularization strength for Logistic Regression
-    
+    Compute SHAP interaction values to identify feature interactions.
+
     Returns:
     --------
-    Dict with keys:
-        - linear_model, linear_importance, vif_data
-        - rf_model, rf_importance, rf_cv_results
-        - lr_model, lr_importance, lr_cv_results (if include_logistic)
-        - comparison: merged comparison table
-        - feature_cols: cleaned feature list
+    Tuple of (interaction_values, interaction_summary_df)
     """
-    from modelling.modelling_utils import remove_collinear_features
-    
-    print("\n" + "="*80)
-    print("RUNNING ALL MODELS")
-    print("="*80)
+    print("\n" + "-" * 40)
+    print("SHAP INTERACTIONS")
+    print("-" * 40)
 
-    # Clean features
-    feature_cols_clean = remove_collinear_features(feature_cols)
-
-    print(f"\nDataset: {len(df)} observations")
-    print(f"Features: {len(feature_cols_clean)}")
-    print(f"Outcome: {outcome_var}")
-    print(f"Unique users: {df[user_id_var].nunique()}")
-
-    # 1. Linear Regression
-    linear_model, linear_importance, vif_data = build_linear_baseline(
-        df, feature_cols_clean, outcome_var, user_id_var, calculate_vif=include_vif
-    )
-
-    # 2. Random Forest
-    rf_model, rf_importance, rf_cv_results = build_random_forest_model(
-        df, feature_cols_clean, outcome_var, user_id_var, n_estimators=rf_n_estimators
-    )
-
-    # 3. Logistic Regression (optional)
-    lr_model, lr_importance, lr_cv_results = None, None, None
-    if include_logistic:
-        lr_model, lr_importance, lr_cv_results = build_logistic_regression_model(
-            df, feature_cols_clean, outcome_var, user_id_var,
-            regularization_C=lr_regularization_C
-        )
-
-    # =========================================================================
-    # CREATE COMPARISON TABLE
-    # =========================================================================
-    print("\n" + "="*70)
-    print("CREATING COMPARISON TABLE")
-    print("="*70)
-
-    # Start with linear results
-    comparison = linear_importance[['feature', 'coefficient', 'p_value', 't_stat']].copy()
-    comparison = comparison.rename(columns={
-        'coefficient': 'linear_coef',
-        'p_value': 'linear_p_value',
-        't_stat': 'linear_t_stat',
-    })
-
-    # Add RF importance
-    comparison = comparison.merge(
-        rf_importance[['feature', 'rf_importance', 'rf_importance_pct']],
-        on='feature', how='left'
-    )
-
-    # Add logistic results
-    if include_logistic and lr_importance is not None:
-        comparison = comparison.merge(
-            lr_importance[['feature', 'lr_coefficient', 'lr_odds_ratio', 
-                          'lr_p_value', 'lr_significant']],
-            on='feature', how='left'
-        )
-
-    # Add VIF
-    comparison = comparison.merge(vif_data[['feature', 'VIF']], on='feature', how='left')
-
-    # Calculate ranks
-    comparison['linear_rank'] = comparison['linear_coef'].abs().rank(ascending=False)
-    comparison['rf_rank'] = comparison['rf_importance'].rank(ascending=False)
-    
-    if include_logistic and 'lr_coefficient' in comparison.columns:
-        comparison['lr_rank'] = comparison['lr_coefficient'].abs().rank(ascending=False)
-        comparison['avg_rank'] = (
-            comparison['linear_rank'] + comparison['rf_rank'] + comparison['lr_rank']
-        ) / 3
+    # Sample - interactions are computationally expensive
+    if len(X) > sample_size:
+        print(f"Sampling {sample_size:,} observations for interactions...")
+        X_sample = X.sample(n=sample_size, random_state=42)
     else:
-        comparison['avg_rank'] = (comparison['linear_rank'] + comparison['rf_rank']) / 2
+        X_sample = X
 
-    comparison = comparison.sort_values('avg_rank')
+    print(f"Computing interaction values (this may take a while)...")
+    interaction_values = explainer.shap_interaction_values(X_sample)
 
-    print(f"\n✓ Comparison table created with {len(comparison)} features")
+    # Summarize interactions
+    n_features = len(X.columns)
+    interaction_strength = []
 
-    # Build results dictionary
-    results = {
-        'linear_model': linear_model,
-        'linear_importance': linear_importance,
-        'vif_data': vif_data,
-        'rf_model': rf_model,
-        'rf_importance': rf_importance,
-        'rf_cv_results': rf_cv_results,
-        'comparison': comparison,
-        'feature_cols': feature_cols_clean,
-    }
+    for i in range(n_features):
+        for j in range(i + 1, n_features):
+            # Mean absolute interaction effect
+            strength = np.abs(interaction_values[:, i, j]).mean()
+            interaction_strength.append(
+                {
+                    "feature_1": X.columns[i],
+                    "feature_2": X.columns[j],
+                    "interaction_strength": strength,
+                }
+            )
 
-    if include_logistic:
-        results['lr_model'] = lr_model
-        results['lr_importance'] = lr_importance
-        results['lr_cv_results'] = lr_cv_results
+    interaction_df = pd.DataFrame(interaction_strength)
+    interaction_df = interaction_df.sort_values("interaction_strength", ascending=False)
+    interaction_df["rank"] = range(1, len(interaction_df) + 1)
 
-    return results
+    print(f"\n✓ Computed {len(interaction_df):,} pairwise interactions")
+    print(f"\nTop {top_n} feature interactions:")
+    print(interaction_df.head(top_n).to_string(index=False))
+
+    return interaction_values, interaction_df
+
+
+def get_shap_contributions(
+    shap_values: np.ndarray,
+    X: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Calculate mean SHAP contribution (signed) per feature.
+
+    This shows the average directional effect on the outcome:
+    - Positive: feature increases wonkiness
+    - Negative: feature decreases wonkiness
+
+    Returns:
+    --------
+    pd.DataFrame with feature, mean_contribution, abs_contribution
+    """
+    contributions = pd.DataFrame(
+        {
+            "feature": X.columns,
+            "mean_contribution": shap_values.mean(axis=0),
+            "abs_contribution": np.abs(shap_values).mean(axis=0),
+        }
+    )
+
+    contributions["variance_scale"] = ((
+        contributions["abs_contribution"] - contributions["mean_contribution"].abs()
+    ) / contributions["abs_contribution"]).round(2)
+
+    contributions["direction"] = contributions["mean_contribution"].apply(
+        lambda x: "↑ increases" if x > 0 else "↓ decreases"
+    )
+    return contributions.sort_values("abs_contribution", ascending=False)
+
+
+# =============================================================================
+# COMBINED RESULTS
+# =============================================================================
+
+
+def create_feature_summary(
+    rf_importance: pd.DataFrame,
+    shap_importance: pd.DataFrame,
+    shap_contributions: pd.DataFrame,
+    stats_coefficients: pd.DataFrame,
+    vif_data: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Create unified feature summary table combining all metrics.
+
+    Parameters:
+    -----------
+    rf_importance : pd.DataFrame
+        From build_random_forest, contains rf_importance, rf_importance_pct
+    shap_importance : pd.DataFrame
+        From compute_shap_values, contains shap_importance, shap_importance_pct
+    shap_contributions : pd.DataFrame
+        From get_shap_contributions, contains mean_contribution, direction
+    stats_coefficients : pd.DataFrame
+        From extract_ols_coefficients, contains ols_coefficient, ols_pvalue, etc.
+    vif_data : pd.DataFrame
+        From calculate_vif, contains VIF, multicollinearity_flag
+
+    Returns:
+    --------
+    pd.DataFrame - unified feature summary sorted by SHAP importance
+    """
+    summary = rf_importance[["feature", "rf_importance", "rf_importance_pct"]].copy()
+
+    # Merge SHAP importance
+    summary = summary.merge(
+        shap_importance[["feature", "shap_importance", "shap_importance_pct"]],
+        on="feature",
+        how="left",
+    )
+
+    # Merge SHAP contributions
+    summary = summary.merge(
+        shap_contributions[["feature", "mean_contribution", "direction"]],
+        on="feature",
+        how="left",
+    )
+
+    # Merge OLS coefficients (from test_results_df)
+    stats_cols = [
+        "feature",
+        "ols_coefficient",
+        "ols_pvalue",
+        "significant_both",
+        "ols_cohens_d",
+        "ols_effect_size",
+        'ols_interpretation_short',
+        'odds_ratio',
+        'logit_p_value',
+        'lr_interpretation_short',
+    ]
+    available_cols = [c for c in stats_cols if c in stats_coefficients.columns]
+    summary = summary.merge(stats_coefficients[available_cols], on="feature", how="left")
+
+    # Merge VIF
+    summary = summary.merge(
+        vif_data[["feature", "VIF", "multicollinearity_flag"]], on="feature", how="left"
+    )
+
+    # Formating
+    summary["shap_importance_pct"] = summary["shap_importance_pct"].round(3)/100
+    summary["rf_importance_pct"] = summary["rf_importance_pct"].round(3)/100
+
+    # Rank by SHAP importance
+    summary = summary.sort_values("shap_importance", ascending=False)
+    summary["rank"] = range(1, len(summary) + 1)
+
+    return summary

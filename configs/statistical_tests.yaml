@@ -4,6 +4,7 @@ feature_sets:
 
   tasks_completed:
     - task_completed
+    - task_completed_PWABTC
     - total_tasks_1_10
     - total_tasks_11_25
     - total_tasks_26_75
@@ -12,7 +13,6 @@ feature_sets:
     - total_tasks_176_225
     - total_tasks_226_plus
 
-  # Cumulative bins (overlapping)
   # days_active_cumulative:
     # - days_active_<2
     # - days_active_<10
@@ -27,9 +27,7 @@ feature_sets:
     # - days_active_<250
     # - days_active_>=250
 
-# Mutually exclusive bins
   days_active_exclusive:
-    - days_active_before_task
     - days_active_0_to_2
     - days_active_3_to_10
     - days_active_11_to_20
@@ -42,6 +40,11 @@ feature_sets:
     - days_active_151_to_200
     - days_active_201_to_250
     - days_active_251_plus
+
+  days_active_numeric:
+    - days_active_before_task
+    - days_active_before_task_div_mean
+    - weeks_active_before_task
 
   temporal_day_of_week:
     - is_weekend
@@ -101,6 +104,8 @@ feature_sets:
 
   quality:
     - quality
+    - quality_diff_from_max
+    - quality_stretched
     - quality_round10_0
     - quality_round10_20
     - quality_round10_30
@@ -114,6 +119,8 @@ feature_sets:
 
   risk:
     - risk
+    - risk_diff_from_min
+    - risk_stretched
     - risk_round10_0
     - risk_round10_20,
     - risk_round10_30,
@@ -419,51 +426,3 @@ feature_sets:
 
   misc:
     - age_YOB
-
-
-# test_settings:
-#   significance_level: 0.05
-#   bonferroni_correction: true
-#   outcome_var: "wonky_study_count"
-#   user_id_var: "respondentPk"
-#   min_sample_size: 30
-
-# feature_groups:
-#   behavioral:
-#     - tasks_completed
-#     - days_active_cumulative
-#     - days_active_exclusive
-#     - task_speed
-#     - entry_point
-
-#   temporal:
-#     - temporal_day_of_week
-#     - temporal_business_hours
-#     - temporal_time_of_day
-
-#   demographic:
-#     - gender
-#     - income
-#     - region
-#     - employer_industry
-#     - employer_department
-
-#   platform:
-#     - platform
-#     - device
-#     - hardware_category      # Updated from 'hardware'
-#     - manufacturer_category  # NEW
-#     - ditr_os
-
-#   user_settings:
-#     - email_verification
-#     - share_location_data
-#     - notify_new_task
-#     - notify_task_payout
-
-#   quality_risk:
-#     - quality
-#     - risk
-
-#   experimental:
-#     - exposure

@@ -59,29 +59,14 @@ def enrich_user_info_with_task_counts(
     )
 
 
-def union_wonky_study_dataframes(balance_dfs: List[DataFrame]) -> DataFrame:
-    """
-    Union multiple wonky study balance DataFrames.
-
-    Parameters
-    ----------
-    balance_dfs : List[DataFrame]
-        List of balance DataFrames
-
-    Returns
-    -------
-    DataFrame
-        Unioned DataFrame
-        
-    Raises
-    ------
-    ValueError
-        If no DataFrames provided
-    """
     if not balance_dfs:
         raise ValueError("No DataFrames provided")
 
-    return reduce(lambda df1, df2: df1.union(df2), balance_dfs)
+    result = balance_dfs[0]
+    for df in balance_dfs[1:]:
+        result = result.unionByName(df, allowMissingColumns=True)
+    
+    return result
 
 
 def create_wonky_respondent_summary(
@@ -191,3 +176,35 @@ def calculate_wonky_task_ratio(
     )
 
     return wonky_counts
+
+
+def union_wonky_study_dataframes(balance_dfs: List[DataFrame]) -> DataFrame:
+    """
+    Union multiple wonky study balance DataFrames.
+
+    Uses unionByName with allowMissingColumns to handle schema variations
+    across different study balance tables.
+
+    Parameters
+    ----------
+    balance_dfs : List[DataFrame]
+        List of balance DataFrames
+
+    Returns
+    -------
+    DataFrame
+        Unioned DataFrame
+        
+    Raises
+    ------
+    ValueError
+        If no DataFrames provided
+    """
+    if not balance_dfs:
+        raise ValueError("No DataFrames provided")
+
+    result = balance_dfs[0]
+    for df in balance_dfs[1:]:
+        result = result.unionByName(df, allowMissingColumns=True)
+    
+    return result

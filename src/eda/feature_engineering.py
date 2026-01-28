@@ -129,13 +129,13 @@ def create_all_temporal_features(
         (df["hour_of_day"] >= 9) & (df["hour_of_day"] <= 17)
     ).astype(int)
     
-    df["is_business_hour_weekday"] = (
-        (df["is_business_hour"] == 1) & (df["is_weekend"] == 0)
-    ).astype(int)
+    # df["is_business_hour_weekday"] = (
+    #     (df["is_business_hour"] == 1) & (df["is_weekend"] == 0)
+    # ).astype(int)
     
-    df["is_business_hour_weekend"] = (
-        (df["is_business_hour"] == 1) & (df["is_weekend"] == 1)
-    ).astype(int)
+    # df["is_business_hour_weekend"] = (
+    #     (df["is_business_hour"] == 1) & (df["is_weekend"] == 1)
+    # ).astype(int)
     
     if include_hourly:
         for hour in range(24):
