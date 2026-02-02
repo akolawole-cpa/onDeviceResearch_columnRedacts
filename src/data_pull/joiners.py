@@ -1,11 +1,9 @@
 """
-Data Joiners Module
-
-Functions for joining multiple Spark DataFrames.
+Data Joiners Module.
 """
 
 from pyspark.sql import DataFrame
-from pyspark.sql.functions import col
+from pyspark.sql.functions import col, lit, concat_ws, when, broadcast
 from typing import Optional, List
 import pandas as pd
 
@@ -15,61 +13,39 @@ def join_user_task_respondent(
     task_complete_df: DataFrame,
     respondent_info_df: DataFrame,
     ditr_df: Optional[DataFrame] = None,
-    join_type: str = "inner"
+    join_type: str = "inner",
 ) -> DataFrame:
     """
     Join user, task_complete, respondent_info, and optionally DITR tables.
-    
-    This creates a task-level dataset with user demographics, profile info,
-    and optionally device/hardware information.
-    
-    Parameters
-    ----------
-    user_df : DataFrame
-        User DataFrame (from load_user_table)
-    task_complete_df : DataFrame
-        Task complete DataFrame (from load_task_complete_table)
-    respondent_info_df : DataFrame
-        Respondent info DataFrame (from load_respondent_info_table)
-    ditr_df : DataFrame, optional
-        Device info DataFrame (from load_ditr_table). If provided, joins
-        hardware, manufacturer, OS, and app_version columns.
-    join_type : str
-        Type of join (default: "inner")
-        
-    Returns
-    -------
-    DataFrame
-        Joined DataFrame at task-completion level
     """
-    # User -> Task Complete
     joined = user_df.join(
         task_complete_df,
         user_df.respondent_pk == task_complete_df.respondentPk,
-        join_type
+        join_type,
     )
-    
-    # -> Respondent Info (drop duplicate respondent_pk after join)
+
     joined = joined.join(
         respondent_info_df,
         user_df.respondent_pk == respondent_info_df.respondent_pk,
-        join_type
+        join_type,
     ).drop(respondent_info_df.respondent_pk)
-    
-    # -> DITR (device info)
+
     if ditr_df is not None:
-        ditr_cols_to_rename = ['date_created', 'respondent_pk', 'hardware',
-                               'manufacturer', 'os']
+        ditr_cols_to_rename = [
+            "date_created",
+            "respondent_pk",
+            "hardware",
+            "manufacturer",
+            "os",
+        ]
         for col_name in ditr_cols_to_rename:
             if col_name in ditr_df.columns:
                 ditr_df = ditr_df.withColumnRenamed(col_name, f"ditr_{col_name}")
-        
+
         joined = joined.join(
-            ditr_df,
-            user_df.respondent_pk == ditr_df.ditr_respondent_pk,
-            "left"
+            ditr_df, user_df.respondent_pk == ditr_df.ditr_respondent_pk, "left"
         )
-    
+
     return joined
 
 
@@ -78,165 +54,242 @@ def join_wonky_balance_with_task(
     task_df: DataFrame,
     balance_survey_col: str = "survey_pk",
     task_origin_id_col: str = "task_origin_id",
-    join_type: str = "inner"
+    join_type: str = "inner",
 ) -> DataFrame:
-    """
-    Join wonky study balance table with task table.
-    
-    Parameters
-    ----------
-    balance_df : DataFrame
-        Balance DataFrame from wonky study
-    task_df : DataFrame
-        Task DataFrame
-    balance_survey_col : str
-        Survey column name in balance DataFrame
-    task_origin_id_col : str
-        Origin ID column name in task DataFrame
-    join_type : str
-        Type of join (default: "inner")
-        
-    Returns
-    -------
-    DataFrame
-        Joined DataFrame
-    """
+    """Join wonky study balance table with task table."""
     return balance_df.join(
         task_df,
         balance_df[balance_survey_col] == task_df[task_origin_id_col],
-        join_type
+        join_type,
     )
 
 
-def merge_wonky_data_with_user_info(
-    user_info_df: pd.DataFrame,
-    wonky_respondent_df: pd.DataFrame,
-    how: str = "left"
+def merge_wonky_data_spark(
+    user_info_spark: DataFrame,
+    wonky_respondent_spark: DataFrame,
+    user_respondent_col: str = "respondentPk",
+    user_task_col: str = "taskPk",
+    wonky_respondent_col: str = "balance_respondentPk",
+    wonky_task_col: str = "task_pk",
+) -> DataFrame:
+    """
+    Merge wonky study data with user info DataFrame in spark.
+    """
+    user_info_spark = user_info_spark.withColumn(
+        "user_task_pk",
+        concat_ws(
+            "_",
+            col(user_respondent_col).cast("string"),
+            col(user_task_col).cast("string"),
+        ),
+    )
+
+    wonky_respondent_spark = wonky_respondent_spark.withColumn(
+        "user_task_pk",
+        concat_ws(
+            "_",
+            col(wonky_respondent_col).cast("string"),
+            col(wonky_task_col).cast("string"),
+        ),
+    )
+
+    wonky_respondents = wonky_respondent_spark.select(wonky_respondent_col).distinct()
+
+    user_info_spark = (
+        user_info_spark.join(
+            broadcast(wonky_respondents.withColumn("_is_wonky_user", lit(1))),
+            user_info_spark[user_respondent_col]
+            == wonky_respondents[wonky_respondent_col],
+            "left",
+        )
+        .withColumn("wonky_user_flag", when(col("_is_wonky_user") == 1, 1).otherwise(0))
+        .drop("_is_wonky_user")
+    )
+
+    if wonky_respondent_col in user_info_spark.columns:
+        col_count = sum(1 for c in user_info_spark.columns if c == wonky_respondent_col)
+        if col_count > 1:
+            user_info_spark = user_info_spark.drop(
+                wonky_respondents[wonky_respondent_col]
+            )
+
+    wonky_merge_cols = [
+        "user_task_pk",
+        "task_pk",
+        "balance_respondentPk",
+        "wonky_study_count",
+        "request-remote-addr",
+        "task_targeting_type",
+        "exposure_band",
+        "survey_type",
+    ]
+
+    available_cols = [
+        c for c in wonky_merge_cols if c in wonky_respondent_spark.columns
+    ]
+
+    wonky_subset = wonky_respondent_spark.select(*available_cols)
+
+    for c in available_cols:
+        if c != "user_task_pk":
+            if c in user_info_spark.columns:
+                wonky_subset = wonky_subset.withColumnRenamed(c, f"{c}_wonky")
+
+    result = user_info_spark.join(
+        broadcast(wonky_subset), on="user_task_pk", how="left"
+    )
+
+    indicator_col = None
+    for c in available_cols:
+        if c != "user_task_pk":
+            check_col = f"{c}_wonky" if f"{c}_wonky" in result.columns else c
+            if check_col in result.columns:
+                indicator_col = check_col
+                break
+
+    if indicator_col:
+        result = result.withColumn(
+            "_merge",
+            when(col(indicator_col).isNotNull(), lit("both")).otherwise(
+                lit("left_only")
+            ),
+        )
+    else:
+        result = result.withColumn("_merge", lit("left_only"))
+
+    wonky_count_col = (
+        "wonky_study_count_wonky"
+        if "wonky_study_count_wonky" in result.columns
+        else "wonky_study_count"
+    )
+
+    if wonky_count_col in result.columns:
+        result = result.withColumn(
+            "wonky_study_count",
+            when(col(wonky_count_col).isNotNull(), col(wonky_count_col)).otherwise(
+                lit(0)
+            ),
+        )
+        if wonky_count_col == "wonky_study_count_wonky":
+            result = result.drop("wonky_study_count_wonky")
+    else:
+        result = result.withColumn("wonky_study_count", lit(0))
+
+    return result
+
+
+def prepare_final_output(
+    merged_spark: DataFrame,
+    columns_to_keep: Optional[List[str]] = None,
+    drop_duplicates: bool = True,
 ) -> pd.DataFrame:
     """
-    Merge wonky study data with user info DataFrame.
-
-    Creates a composite key (respondent + task) to merge at task level,
-    and adds a wonky_user_flag for respondent-level identification.
-
-    Parameters
-    ----------
-    user_info_df : pd.DataFrame
-        User info DataFrame (task-level)
-    wonky_respondent_df : pd.DataFrame
-        Wonky respondent DataFrame (task-level aggregated)
-    how : str
-        Type of merge (default: "left")
-
-    Returns
-    -------
-    pd.DataFrame
-        Merged DataFrame with wonky_user_flag and wonky_study_count
+    Convert final Spark DataFrame to pandas with optional column selection.
     """
-    user_info_df = user_info_df.copy()
-    wonky_respondent_df = wonky_respondent_df.copy()
-    
-    user_info_df['user_task_pk'] = (
-        user_info_df['respondentPk'].astype(str) + '_' +
-        user_info_df['taskPk'].astype(str)
-    )
-    wonky_respondent_df['user_task_pk'] = (
-        wonky_respondent_df['balance_respondentPk'].astype(str) + '_' +
-        wonky_respondent_df['task_pk'].astype(str)
-    )
 
-    wonky_respondent_set = set(wonky_respondent_df['balance_respondentPk'].unique())
-    user_info_df['wonky_user_flag'] = (
-        user_info_df['respondentPk'].isin(wonky_respondent_set).astype(int)
-    )
+    original_cols = merged_spark.columns
+    seen = {}
+    new_cols = []
 
-    merge_cols = ['user_task_pk', 'task_pk', 'balance_respondentPk', 'wonky_study_count',
-                  'request-remote-addr', 'task_targeting_type', 'exposure_band']
-    available_merge_cols = [c for c in merge_cols if c in wonky_respondent_df.columns]
+    for col_name in original_cols:
+        if col_name in seen:
+            seen[col_name] += 1
+            new_name = f"{col_name}_dup{seen[col_name]}"
+            new_cols.append(new_name)
+        else:
+            seen[col_name] = 0
+            new_cols.append(col_name)
 
-    return user_info_df.merge(
-        wonky_respondent_df[available_merge_cols],
-        on='user_task_pk',
-        how=how,
-        suffixes=('', '_wonky'),
-        indicator=True
-    )
+    if new_cols != original_cols:
+        merged_spark = merged_spark.toDF(*new_cols)
+        print(
+            f"  Note: Renamed {sum(1 for c in new_cols if '_dup' in c)} duplicate columns"
+        )
+
+    if columns_to_keep:
+        available = [c for c in columns_to_keep if c in merged_spark.columns]
+
+        missing = [c for c in columns_to_keep if c not in merged_spark.columns]
+        if missing:
+            print(
+                f"  Warning: Requested columns not found: {missing[:10]}{'...' if len(missing) > 10 else ''}"
+            )
+
+        if available:
+            merged_spark = merged_spark.select(*available)
+        else:
+            print("  Warning: No requested columns found, returning all columns")
+
+    pdf = merged_spark.toPandas()
+
+    if drop_duplicates:
+        pdf = pdf.loc[:, ~pdf.columns.duplicated(keep="first")]
+
+    return pdf
 
 
-def drop_duplicate_columns(df: pd.DataFrame, keep: str = 'first') -> pd.DataFrame:
+def deduplicate_spark_columns(spark_df: DataFrame) -> DataFrame:
     """
-    Remove duplicate columns from a pandas DataFrame.
-    
-    This is useful after merges that create columns like 'task_pk' and 'task_pk_wonky',
-    or when Spark-to-pandas conversion results in duplicate column names.
-    
-    Parameters
-    ----------
-    df : pd.DataFrame
-        DataFrame potentially containing duplicate columns
-    keep : str
-        Which duplicate to keep: 'first' or 'last'
-        
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame with duplicate columns removed
-        
-    Example
-    -------
-    >>> df = drop_duplicate_columns(user_info_df)
+    Deduplicate column names in a Spark DataFrame.
     """
-    return df.loc[:, ~df.columns.duplicated(keep=keep)]
+    original_cols = spark_df.columns
+    seen = {}
+    new_cols = []
+
+    for col_name in original_cols:
+        if col_name in seen:
+            seen[col_name] += 1
+            new_cols.append(f"{col_name}_dup{seen[col_name]}")
+            print(f"Renamed column {col_name} to {new_cols[-1]}")
+        else:
+            seen[col_name] = 0
+            new_cols.append(col_name)
+
+    if new_cols != original_cols:
+        return spark_df.toDF(*new_cols)
+
+    return spark_df
 
 
-def merge_task_metadata(
-    user_info_df: pd.DataFrame,
-    tasks_df: pd.DataFrame,
-    task_cols: Optional[List[str]] = None
-) -> pd.DataFrame:
+def validate_merge_equivalence(
+    spark_result_pdf: pd.DataFrame, original_columns: List[str] = None
+) -> dict:
     """
-    Merge task metadata into user_info DataFrame, handling duplicates cleanly.
-    
-    This merges on taskPk -> task_pk and drops the redundant task_pk column
-    to avoid duplicate column issues.
-    
-    Parameters
-    ----------
-    user_info_df : pd.DataFrame
-        User info DataFrame with 'taskPk' column
-    tasks_df : pd.DataFrame
-        Tasks DataFrame with 'task_pk' and other metadata columns
-    task_cols : list, optional
-        Columns to bring from tasks_df. Defaults to ['task_pk', 'task_length_of_task']
-        
-    Returns
-    -------
-    pd.DataFrame
-        Merged DataFrame with task metadata added
-        
-    Example
-    -------
-    >>> user_info_df = merge_task_metadata(user_info_df, tasks_df)
+    Validate that Spark merge output has expected columns and structure.
     """
-    if task_cols is None:
-        task_cols = ['task_pk', 'task_length_of_task']
-    
-    # Ensure task_pk is in the list (needed for merge)
-    if 'task_pk' not in task_cols:
-        task_cols = ['task_pk'] + task_cols
-    
-    # Only select columns that exist
-    available_cols = [c for c in task_cols if c in tasks_df.columns]
-    
-    merged = user_info_df.merge(
-        tasks_df[available_cols],
-        left_on='taskPk',
-        right_on='task_pk',
-        how='left'
-    )
-    
-    # Drop the redundant task_pk (we already have taskPk)
-    if 'task_pk' in merged.columns and 'taskPk' in merged.columns:
-        merged = merged.drop(columns=['task_pk'])
-    
-    return merged
+    if original_columns is None:
+        original_columns = [
+            "user_task_pk",
+            "wonky_user_flag",
+            "wonky_study_count",
+            "_merge",
+        ]
+
+    results = {"passed": True, "missing_cols": [], "extra_cols": [], "checks": {}}
+
+    for col in original_columns:
+        if col not in spark_result_pdf.columns:
+            results["missing_cols"].append(col)
+            results["passed"] = False
+
+    if "_merge" in spark_result_pdf.columns:
+        merge_values = set(spark_result_pdf["_merge"].unique())
+        expected_values = {"both", "left_only"}
+        results["checks"]["_merge_values"] = merge_values.issubset(
+            expected_values | {None}
+        )
+        if not results["checks"]["_merge_values"]:
+            results["passed"] = False
+
+    if "wonky_study_count" in spark_result_pdf.columns:
+        null_count = spark_result_pdf["wonky_study_count"].isna().sum()
+        results["checks"]["wonky_study_count_no_nulls"] = null_count == 0
+        if null_count > 0:
+            results["passed"] = False
+            results["checks"]["wonky_study_count_null_count"] = int(null_count)
+
+    if "wonky_user_flag" in spark_result_pdf.columns:
+        unique_flags = set(spark_result_pdf["wonky_user_flag"].unique())
+        results["checks"]["wonky_user_flag_binary"] = unique_flags.issubset({0, 1})
+
+    return results

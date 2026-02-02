@@ -127,7 +127,7 @@ def build_random_forest(
         cv_metrics["test_mae"].append(test_mae)
 
         print(f"  Fold {fold}: Test R²={test_r2:.4f}, Train R²={train_r2:.4f}")
-        print(f"  Fold {fold}: Test R²={test_rmse:.4f}, Train R²={train_r2:.4f}")
+        print(f"  Fold {fold}: Test RMSE={test_rmse:.4f}, Test MAE={test_mae:.4f}")
 
     # Summary
     print(f"\nCV Summary:")

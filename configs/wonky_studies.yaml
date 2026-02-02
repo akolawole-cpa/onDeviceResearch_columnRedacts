@@ -205,7 +205,6 @@ cols_to_drop:
   - "amount"
   - "button_text"
   - "category"
-  - "date_created"
   - "description"
   - "epc"
   - "field_end_date"

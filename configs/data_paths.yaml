@@ -29,6 +29,11 @@ output_files:
   test_results_df: "dbfs:/FileStore/misc/testing_df.csv"
   feature_summary: "dbfs:/FileStore/misc/feature_summary.csv"
   interactions: "dbfs:/FileStore/misc/feature_interactions.csv"
+  feature_summary_control: "dbfs:/FileStore/misc/feature_summary_control.csv"
+  interactions_control: "dbfs:/FileStore/misc/feature_interactions_control.csv"
+  feature_summary_exposed: "dbfs:/FileStore/misc/feature_summary_exposed.csv"
+  interactions_exposed: "dbfs:/FileStore/misc/feature_interactions_exposed.csv"
+
 
 
 # Data filters

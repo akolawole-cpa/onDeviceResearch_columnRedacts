@@ -4,7 +4,7 @@ Statistical Tests Module - Simplified & Streamlined
 Runs OLS and Logistic Regression with cluster-robust standard errors.
 Outputs a single combined results table with interpretations.
 
-Main function: run_statistical_tests()
+Main executing function: run_statistical_tests()
 
 Output columns:
 - feature: Feature name
@@ -110,6 +110,7 @@ def _fit_single_feature(
     user_id_var: str,
     significance_level: float,
     baseline_mean: float,
+    min_threshold: int = 5,
 ) -> Optional[Dict]:
     """
     Fit both OLS and Logistic regression for a single feature.
@@ -129,50 +130,45 @@ def _fit_single_feature(
     
     # Checks
     if len(df_test) < 30 or df_test[feature].nunique() < 2:
+        print("needs variation, check sample and target feature")
         return None
     if df_test[outcome_binary].nunique() < 2:
+        print("needs variation, check target feature")
         return None
     
-    # Detect feature type
     feature_type = _detect_feature_type(df_test[feature])
     
-    # Calculating wonky rates 
-    mask_wonky = df_test[outcome_binary] == 1  # outcome > 0
-    mask_non_wonky = df_test[outcome_binary] == 0  # outcome == 0
+    mask_wonky = df_test[outcome_binary] > 0  
+    mask_non_wonky = df_test[outcome_binary] == 0  
     
     n_wonky = mask_wonky.sum()
     n_non_wonky = mask_non_wonky.sum()
     
-    if n_wonky < 5 or n_non_wonky < 5:
+    if n_wonky < min_threshold or n_non_wonky < min_threshold:
         return None
     
     wonky_mean = df_test.loc[mask_wonky, feature].mean()
     non_wonky_mean = df_test.loc[mask_non_wonky, feature].mean()
     
-    # For binary features: calculate sample sizes by feature presence
-    # For numeric features: skip this check
     if feature_type == 'binary':
         mask_with_feature = df_test[feature] == 1
         mask_without_feature = df_test[feature] == 0
         n_with_feature = mask_with_feature.sum()
         n_without_feature = mask_without_feature.sum()
         
-        # Only skip if BOTH groups are too small (allows rare features)
-        if n_with_feature < 5 and n_without_feature < 5:
+        if n_with_feature < min_threshold and n_without_feature < min_threshold:
             return None
         
-        # Calculate outcome means by feature presence (if enough samples)
-        if n_with_feature >= 1:
+        if n_with_feature >= min_threshold:
             mean_outcome_with_feature = df_test.loc[mask_with_feature, outcome_var].mean()
         else:
             mean_outcome_with_feature = None
             
-        if n_without_feature >= 1:
+        if n_without_feature >= min_threshold:
             mean_outcome_without_feature = df_test.loc[mask_without_feature, outcome_var].mean()
         else:
             mean_outcome_without_feature = None
     else:
-        # For numeric features
         n_with_feature = None
         n_without_feature = None
         mean_outcome_with_feature = None
@@ -364,7 +360,7 @@ def _fit_single_feature(
     return result
 
 
-# MAIN PUBLIC FUNCTION
+# MAIN FUNCTION
 
 def run_statistical_tests(
     df: pd.DataFrame,
@@ -530,8 +526,6 @@ def run_statistical_tests(
     return results_df
 
 
-# SUMMARY & FORMATTING FUNCTIONS
-
 def get_summary_table(
     results_df: pd.DataFrame,
     top_n: int = 20,
@@ -556,10 +550,8 @@ def get_summary_table(
     """
     df = results_df.reset_index().copy()
     
-    # Sort and select top N
     df = df.sort_values(sort_by, key=abs, ascending=False).head(top_n)
     
-    # Select and rename columns for readability
     summary_cols = {
         'feature': 'Feature',
         'feature_type': 'Type',
