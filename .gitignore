@@ -69,9 +69,6 @@ databricks.yml.local
 .DS_Store
 Thumbs.db
 
-# Education file (should not be committed)
-EDUCATION.md
-
 # Cache
 .cache/
 *.cache
