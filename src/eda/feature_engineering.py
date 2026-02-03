@@ -31,7 +31,6 @@ def create_task_amount_features(
     """
     df = df.copy()
 
-    # Define bins and labels
     bins = [0, 10, 25, 75, 125, 175, 225, float("inf")]
     labels = [
         "total_tasks_1_10",
@@ -43,7 +42,6 @@ def create_task_amount_features(
         "total_tasks_226_plus",
     ]
 
-    # Categorise
     task_bins = pd.cut(
         df[task_col],
         bins=bins,
@@ -52,10 +50,8 @@ def create_task_amount_features(
         include_lowest=True,
     )
 
-    # One-hot encode into dummy columns
     task_dummies = pd.get_dummies(task_bins, prefix="", prefix_sep="")
 
-    # Ensure all dummy columns exist (even if 0) and cast to int
     task_dummies = task_dummies[labels].astype(int)
     df = pd.concat([df, task_dummies], axis=1)
 
@@ -70,7 +66,7 @@ def create_all_temporal_features(
     """
     Create comprehensive time-related features from a datetime column.
     
-    Combines day-of-week, business hours, AND hourly features.
+    Combines day-of-week, business hours and hourly features.
     
     Parameters:
     -----------
@@ -129,14 +125,6 @@ def create_all_temporal_features(
         (df["hour_of_day"] >= 9) & (df["hour_of_day"] <= 17)
     ).astype(int)
     
-    # df["is_business_hour_weekday"] = (
-    #     (df["is_business_hour"] == 1) & (df["is_weekend"] == 0)
-    # ).astype(int)
-    
-    # df["is_business_hour_weekend"] = (
-    #     (df["is_business_hour"] == 1) & (df["is_weekend"] == 1)
-    # ).astype(int)
-    
     if include_hourly:
         for hour in range(24):
             hour_label = format_hour_label(hour)
@@ -168,7 +156,7 @@ def create_all_temporal_features(
     
     return df
 
-
+# not a very useful feature, kept as a legacy but can be removed.
 def create_task_speed_features(
     df: pd.DataFrame,
     task_time_col: str = "task_time_taken_s",
@@ -179,6 +167,13 @@ def create_task_speed_features(
     """
     Create task speed-related features using standard deviations.
     
+        Use percentiles instead of raw standard deviations to handle outliers robustly
+        Percentiles approximate normal distribution: 
+        - 16th percentile ≈ mean - 1σ (fast)
+        - 2.5th percentile ≈ mean - 2σ (suspiciously fast)
+        - 84th percentile ≈ mean + 1σ (slow)
+        - 97.5th percentile ≈ mean + 2σ (suspiciously slow)
+
     Parameters:
     -----------
     df : pd.DataFrame
@@ -209,16 +204,9 @@ def create_task_speed_features(
     if task_time_col not in df.columns:
         raise ValueError(f"Task time column '{task_time_col}' not found in DataFrame")
     
-    # Calculate task time in minutes
     df["task_time_minutes"] = df[task_time_col] / 60
     
     if use_std_dev:
-        # Use percentiles instead of raw standard deviations to handle outliers robustly
-        # Percentiles approximate normal distribution: 
-        # - 16th percentile ≈ mean - 1σ (fast)
-        # - 2.5th percentile ≈ mean - 2σ (suspiciously fast)
-        # - 84th percentile ≈ mean + 1σ (slow)
-        # - 97.5th percentile ≈ mean + 2σ (suspiciously slow)
         
         valid_times = df[task_time_col].dropna()
         if len(valid_times) == 0:

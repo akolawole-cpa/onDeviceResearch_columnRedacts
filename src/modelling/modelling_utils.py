@@ -50,7 +50,6 @@ def calculate_vif(
             }
         )
 
-    # Add constant for VIF calculation
     X_with_const = X.copy()
     X_with_const["_const"] = 1
 
@@ -77,22 +76,21 @@ def calculate_vif(
 
     vif_df["multicollinearity_flag"] = vif_df["VIF"].apply(flag_vif)
 
-    # Summary
     high_vif = vif_df[vif_df["multicollinearity_flag"] == "high"]
     moderate_vif = vif_df[vif_df["multicollinearity_flag"] == "moderate"]
     low_vif = vif_df[vif_df["multicollinearity_flag"] == "low"]
 
     print(f"VIF Summary:")
-    print(f"   🔴 High (>{threshold_high}): {len(high_vif)} features")
+    print(f"HIGH (>{threshold_high}): {len(high_vif)} features")
     print(
-        f"   🟡 Moderate ({threshold_moderate}-{threshold_high}): {len(moderate_vif)} features"
+        f"MODERATE ({threshold_moderate}-{threshold_high}): {len(moderate_vif)} features"
     )
-    print(f"   🟢 Low (<{threshold_moderate}): {len(low_vif)} features")
+    print(f"LOW (<{threshold_moderate}): {len(low_vif)} features")
 
     if len(high_vif) > 0:
-        print(f"\n⚠ High VIF features:")
+        print(f"High VIF features:")
         for _, row in high_vif.iterrows():
-            print(f"   {row['feature']}: {row['VIF']:.2f}")
+            print(f"{row['feature']}: {row['VIF']:.2f}")
 
     feature_to_set = dict(
         zip(test_results_df["feature"], test_results_df["feature_set"])
@@ -124,10 +122,8 @@ def extract_stat_coefficients(
     pd.DataFrame with columns: feature, feature_set, ols_coefficient, ols_pvalue,
                                ols_significant, cohens_d, cohens_d_magnitude
     """
-    # Filter to requested features
     stat_df = test_results_df[test_results_df["feature"].isin(feature_cols)].copy()
 
-    # Select relevant columns (using current column names)
     result = stat_df[
         [
             "feature",
@@ -148,17 +144,14 @@ def extract_stat_coefficients(
         ]
     ].copy()
 
-    # Rename for consistency
     result = result.rename(
         columns={
             "ols_p_value": "ols_pvalue",
         }
     )
 
-    # Add absolute coefficient for ranking
     result["ols_abs_coefficient"] = result["ols_coefficient"].abs()
 
-    # Report missing features
     found_features = set(result["feature"].tolist())
     missing = [f for f in feature_cols if f not in found_features]
     if missing:

@@ -290,6 +290,10 @@ feature_sets:
     - exposure_band_control
     - exposure_band_exposed
 
+  survey_type:
+    - survey_type_control
+    - survey_type_exposed
+
   entry_point:
     - entryPoint_offerwall
     - entryPoint_notification
