@@ -73,12 +73,11 @@ This step creates features from the processed data that will be used in statisti
 Feature-engineered and one-hot-encodiig dataset to prepare features for testing and modelling.
 
 
-
 ---
 
 ## Step 3: Statistical Testing
-
 **Notebook:** `notebooks/3.respondent_testing.ipynb`
+
 
 This step performs statistical tests to analyze relationships and validate hypotheses about wonkiness.
 
@@ -86,6 +85,7 @@ Uses a combination of OLS and Logistic regression, clustered at a user level to 
 high volume taskers.
 
 ### Supporting Files
+
 
 | File | Purpose |
 |------|---------|
@@ -106,6 +106,7 @@ This step builds and evaluates models to explain wonkiness in studies.
 
 ### Supporting Files
 
+
 | File | Purpose |
 |------|---------|
 | `src/modelling/modelling.py` | Core modelling functions |
@@ -113,8 +114,11 @@ This step builds and evaluates models to explain wonkiness in studies.
 | `src/modelling/modelling_visualization.py` | Model visualization utilities |
 | `configs/models.yaml` | Model configurations and hyperparameters |
 
+
 ### Output
+
 Trained models, feature importance rankings, and reporting artifacts.
+
 
 ---
 
