@@ -456,3 +456,11 @@ feature_sets:
 
   misc:
     - age_YOB
+
+  # Age bucket features (from year of birth)
+  age_buckets:
+    - age_bucket_18_24
+    - age_bucket_25_34
+    - age_bucket_35_44
+    - age_bucket_45_54
+    - age_bucket_55_plus

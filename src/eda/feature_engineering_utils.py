@@ -845,6 +845,72 @@ def create_recency_features(
     return result_df, new_cols
 
 
+def create_age_bucket_features(
+    df: pd.DataFrame,
+    age_col: str = "age_YOB",
+    current_year: int = 2025,
+    prefix: str = "age_bucket_",
+    is_year_of_birth: bool = True,
+) -> Tuple[pd.DataFrame, pd.Index]:
+    """
+    Create age bucket features from year of birth or age column.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame
+    age_col : str
+        Column name containing year of birth or age (default: 'age_YOB')
+    current_year : int
+        Current year for calculating age from YOB (default: 2025)
+    prefix : str
+        Prefix for new columns (default: 'age_bucket_')
+    is_year_of_birth : bool
+        If True, column contains year of birth; if False, contains age directly
+
+    Returns
+    -------
+    Tuple[pd.DataFrame, pd.Index]
+        (DataFrame with features, Index of new column names)
+
+    Example
+    -------
+    >>> df, cols = create_age_bucket_features(df, age_col='age_YOB')
+    # Creates: age_bucket_18_24, age_bucket_25_34, age_bucket_35_44,
+    #          age_bucket_45_54, age_bucket_55_plus
+    """
+    df = df.copy()
+    new_features = {}
+
+    # Calculate age if column is year of birth
+    if is_year_of_birth:
+        age_values = current_year - df[age_col]
+    else:
+        age_values = df[age_col]
+
+    # Create age bucket features
+    new_features[f"{prefix}18_24"] = np.where(
+        (age_values >= 18) & (age_values <= 24), 1, 0
+    )
+    new_features[f"{prefix}25_34"] = np.where(
+        (age_values >= 25) & (age_values <= 34), 1, 0
+    )
+    new_features[f"{prefix}35_44"] = np.where(
+        (age_values >= 35) & (age_values <= 44), 1, 0
+    )
+    new_features[f"{prefix}45_54"] = np.where(
+        (age_values >= 45) & (age_values <= 54), 1, 0
+    )
+    new_features[f"{prefix}55_plus"] = np.where(age_values >= 55, 1, 0)
+
+    # Build result DataFrame
+    new_cols_df = pd.DataFrame(new_features, index=df.index)
+    result_df = pd.concat([df, new_cols_df], axis=1)
+    new_cols = pd.Index(new_features.keys())
+
+    return result_df, new_cols
+
+
 def get_device_mapping_summary(
     df: pd.DataFrame,
     hardware_col: str = "ditr_hardware",
