@@ -847,26 +847,26 @@ def create_recency_features(
 
 def create_age_bucket_features(
     df: pd.DataFrame,
-    age_col: str = "age_YOB",
+    yob_col: str = "yob",
     current_year: int = 2025,
     prefix: str = "age_bucket_",
-    is_year_of_birth: bool = True,
+    include_nan_bucket: bool = True,
 ) -> Tuple[pd.DataFrame, pd.Index]:
     """
-    Create age bucket features from year of birth or age column.
+    Create age bucket features from a year of birth column.
 
     Parameters
     ----------
     df : pd.DataFrame
         Input DataFrame
-    age_col : str
-        Column name containing year of birth or age (default: 'age_YOB')
+    yob_col : str
+        Column name containing year of birth (default: 'yob')
     current_year : int
-        Current year for calculating age from YOB (default: 2025)
+        Current year for calculating age (default: 2025)
     prefix : str
         Prefix for new columns (default: 'age_bucket_')
-    is_year_of_birth : bool
-        If True, column contains year of birth; if False, contains age directly
+    include_nan_bucket : bool
+        If True, create a separate bucket for null values (default: True)
 
     Returns
     -------
@@ -875,20 +875,23 @@ def create_age_bucket_features(
 
     Example
     -------
-    >>> df, cols = create_age_bucket_features(df, age_col='age_YOB')
+    >>> df, cols = create_age_bucket_features(df, yob_col='yob')
     # Creates: age_bucket_18_24, age_bucket_25_34, age_bucket_35_44,
-    #          age_bucket_45_54, age_bucket_55_plus
+    #          age_bucket_45_54, age_bucket_55_plus, age_bucket_nan
     """
     df = df.copy()
     new_features = {}
 
-    # Calculate age if column is year of birth
-    if is_year_of_birth:
-        age_values = current_year - df[age_col]
-    else:
-        age_values = df[age_col]
+    # Convert to numeric (handles string values, coerces errors to NaN)
+    yob_values = pd.to_numeric(df[yob_col], errors="coerce")
 
-    # Create age bucket features
+    # Track null values (original nulls + non-numeric strings)
+    is_null = pd.isna(yob_values)
+
+    # Calculate age from year of birth
+    age_values = current_year - yob_values
+
+    # Create age bucket features (nulls will be 0 in all buckets)
     new_features[f"{prefix}18_24"] = np.where(
         (age_values >= 18) & (age_values <= 24), 1, 0
     )
@@ -902,6 +905,10 @@ def create_age_bucket_features(
         (age_values >= 45) & (age_values <= 54), 1, 0
     )
     new_features[f"{prefix}55_plus"] = np.where(age_values >= 55, 1, 0)
+
+    # Add nan bucket if requested
+    if include_nan_bucket:
+        new_features[f"{prefix}nan"] = np.where(is_null, 1, 0)
 
     # Build result DataFrame
     new_cols_df = pd.DataFrame(new_features, index=df.index)

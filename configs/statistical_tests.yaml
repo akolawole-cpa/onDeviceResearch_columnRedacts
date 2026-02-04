@@ -455,12 +455,22 @@ feature_sets:
     - "taskTitle_Final follow-up task!"
 
   misc:
-    - age_YOB
+    - YOB
 
-  # Age bucket features (from year of birth)
+  # Age bucket features (from wonky study balance tables)
   age_buckets:
     - age_bucket_18_24
     - age_bucket_25_34
     - age_bucket_35_44
     - age_bucket_45_54
     - age_bucket_55_plus
+    - age_bucket_nan
+
+  fieldwork:
+    - adfx_starts_last_30_days_extreme
+    - adfx_starts_last_30_days_high
+    - adfx_starts_last_30_days_med
+    - adfx_starts_last_30_days_low
+    - task_targeting_type_aperture
+    - task_targeting_type_profile
+    - task_targeting_type_respondent
