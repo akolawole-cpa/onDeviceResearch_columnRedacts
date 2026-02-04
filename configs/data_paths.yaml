@@ -16,6 +16,7 @@ tables:
   task_complete: "task_complete"
   respondent_info: "respondent_info"
   task: "task"
+  stripe_verification: "stripe_verification"
 
 # Output file paths (saved in misc folder)
 output_files:

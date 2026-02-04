@@ -408,6 +408,18 @@ feature_sets:
     - fulcrum_region_mapped_Yorkshire And The Humber
     - fulcrum_region_mapped_nan
 
+  # Stripe verification country (from stripe_verification silver table)
+  # NOTE: Update this list after running feature engineering to include
+  # all country codes present in your data
+  stripe_country:
+    - stripe_country_GB
+    - stripe_country_US
+    - stripe_country_DE
+    - stripe_country_FR
+    - stripe_country_AU
+    - stripe_country_NG
+    - stripe_country_nan
+
   ditr_os:
     - ditr_os_android
     - ditr_os_ios

@@ -64,6 +64,53 @@ def join_wonky_balance_with_task(
     )
 
 
+def join_stripe_verification(
+    main_df: DataFrame,
+    stripe_df: DataFrame,
+    main_join_col: str = "respondent_pk",
+    stripe_join_col: str = "respondent_pk",
+    country_alias: str = "stripe_country",
+) -> DataFrame:
+    """
+    Join stripe verification data to main dataframe.
+
+    Adds stripe_country column from stripe_verification table.
+    Uses left join to preserve all records (stripe_country can be null).
+
+    Parameters
+    ----------
+    main_df : DataFrame
+        Main Spark DataFrame to join to
+    stripe_df : DataFrame
+        Stripe verification Spark DataFrame
+    main_join_col : str
+        Column name in main_df to join on
+    stripe_join_col : str
+        Column name in stripe_df to join on
+    country_alias : str
+        Alias for the country column in output
+
+    Returns
+    -------
+    DataFrame
+        Joined DataFrame with stripe_country column added
+    """
+    # Select only needed columns and alias country to avoid conflicts
+    stripe_cols = stripe_df.select(
+        col(stripe_join_col).alias("_stripe_respondent_pk"),
+        col("country").alias(country_alias),
+    )
+
+    # Left join to preserve all records
+    result_df = main_df.join(
+        stripe_cols,
+        main_df[main_join_col] == stripe_cols["_stripe_respondent_pk"],
+        "left",
+    ).drop("_stripe_respondent_pk")
+
+    return result_df
+
+
 def merge_wonky_data_spark(
     user_info_spark: DataFrame,
     wonky_respondent_spark: DataFrame,

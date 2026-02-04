@@ -95,6 +95,39 @@ def load_task_table(
     return df
 
 
+def load_stripe_verification(
+    spark: SparkSession,
+    silver_path: str,
+    select_cols: Optional[List[str]] = None,
+) -> DataFrame:
+    """
+    Load stripe_verification table from silver layer.
+
+    Parameters
+    ----------
+    spark : SparkSession
+    silver_path : str
+        Path to silver layer
+    select_cols : list, optional
+        Columns to select. Defaults to ['respondent_pk', 'country']
+
+    Returns
+    -------
+    DataFrame
+        Stripe verification data with country information
+    """
+    if select_cols is None:
+        select_cols = ["respondent_pk", "country"]
+
+    df = spark.read.format("delta").load(f"{silver_path}stripe_verification")
+
+    available_cols = [c for c in select_cols if c in df.columns]
+    if available_cols:
+        df = df.select(*available_cols)
+
+    return df
+
+
 def load_ditr_table(
     spark: SparkSession,
     silver_path: str,
