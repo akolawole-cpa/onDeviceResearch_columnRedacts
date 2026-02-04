@@ -412,13 +412,27 @@ feature_sets:
   # NOTE: Update this list after running feature engineering to include
   # all country codes present in your data
   stripe_country:
-    - stripe_country_GB
-    - stripe_country_US
-    - stripe_country_DE
-    - stripe_country_FR
-    - stripe_country_AU
-    - stripe_country_NG
-    - stripe_country_nan
+    - stripe_countryGB
+    - stripe_countryUS
+    - stripe_countryDE
+    - stripe_countryFR
+    - stripe_countryAU
+    - stripe_countryNG
+    - stripe_countrynan
+
+  # Recency features (last_seen - date_created difference from wonky study balance)
+  recency_diff_cumulative:
+    - recency_diff_<=2
+    - recency_diff_<=7
+    - recency_diff_>7
+
+  recency_diff_exclusive:
+    - recency_diff_0_to_2
+    - recency_diff_3_to_7
+    - recency_diff_8_plus
+
+  recency_diff_numeric:
+    - recency_diff_days
 
   ditr_os:
     - ditr_os_android

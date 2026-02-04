@@ -743,6 +743,108 @@ def add_device_categories(
     return df
 
 
+def create_recency_features(
+    df: pd.DataFrame,
+    last_seen_col: str,
+    date_created_col: str,
+    thresholds: List[int] = [2, 7],
+    prefix: str = "recency_diff_",
+    include_cumulative: bool = True,
+    include_mutually_exclusive: bool = True,
+) -> Tuple[pd.DataFrame, pd.Index]:
+    """
+    Create features based on the difference between last_seen and date_created.
+
+    Computes the day difference (last_seen - date_created) and creates
+    threshold-based binary features.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame
+    last_seen_col : str
+        Column name for last seen date
+    date_created_col : str
+        Column name for date created
+    thresholds : List[int]
+        List of day thresholds (default: [2, 7])
+    prefix : str
+        Prefix for new columns (default: 'recency_diff_')
+    include_cumulative : bool
+        If True, create cumulative features (<=2, <=7)
+    include_mutually_exclusive : bool
+        If True, create mutually exclusive bins (0-2, 3-7, 8+)
+
+    Returns
+    -------
+    Tuple[pd.DataFrame, pd.Index]
+        (DataFrame with features, Index of new column names)
+
+    Example
+    -------
+    >>> df, cols = create_recency_features(
+    ...     df,
+    ...     last_seen_col='last_seen',
+    ...     date_created_col='date_created',
+    ...     thresholds=[2, 7],
+    ...     prefix='recency_diff_'
+    ... )
+    # Creates columns like:
+    # - recency_diff_days (raw difference)
+    # - recency_diff_<=2, recency_diff_<=7 (cumulative)
+    # - recency_diff_0_to_2, recency_diff_3_to_7, recency_diff_8_plus (mutually exclusive)
+    """
+    df = df.copy()
+    new_features = {}
+
+    # Compute day difference
+    diff_col = f"{prefix}days"
+    df[diff_col] = (
+        pd.to_datetime(df[last_seen_col]) - pd.to_datetime(df[date_created_col])
+    ).dt.days
+    new_features[diff_col] = df[diff_col]
+
+    # Create cumulative threshold features (<=threshold)
+    if include_cumulative:
+        for threshold in thresholds:
+            col_name = f"{prefix}<={threshold}"
+            new_features[col_name] = np.where(df[diff_col] <= threshold, 1, 0)
+
+        # Add >last_threshold feature
+        last_threshold = max(thresholds)
+        col_name = f"{prefix}>{last_threshold}"
+        new_features[col_name] = np.where(df[diff_col] > last_threshold, 1, 0)
+
+    # Create mutually exclusive bin features
+    if include_mutually_exclusive:
+        sorted_thresholds = sorted(thresholds)
+        boundaries = [0] + sorted_thresholds
+
+        for i in range(len(boundaries)):
+            lower = boundaries[i]
+
+            if i < len(boundaries) - 1:
+                upper = boundaries[i + 1]
+                col_name = f"{prefix}{lower}_to_{upper}"
+                new_features[col_name] = np.where(
+                    (df[diff_col] >= lower) & (df[diff_col] <= upper), 1, 0
+                )
+            else:
+                # Last bin: everything above
+                actual_lower = lower + 1
+                col_name = f"{prefix}{actual_lower}_plus"
+                new_features[col_name] = np.where(df[diff_col] >= actual_lower, 1, 0)
+
+    # Build result DataFrame
+    new_cols_df = pd.DataFrame(new_features, index=df.index)
+    result_df = pd.concat(
+        [df.drop(columns=[diff_col], errors="ignore"), new_cols_df], axis=1
+    )
+    new_cols = pd.Index(new_features.keys())
+
+    return result_df, new_cols
+
+
 def get_device_mapping_summary(
     df: pd.DataFrame,
     hardware_col: str = "ditr_hardware",
