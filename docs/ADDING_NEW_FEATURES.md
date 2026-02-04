@@ -4,6 +4,47 @@ This guide explains how to add new features to the wonky study analysis pipeline
 
 ---
 
+## Running Concurrently (Multiple Users)
+
+When multiple people run the pipeline simultaneously, use the `PipelineConfig` class to namespace your output files and avoid conflicts.
+
+### Quick Start
+
+```python
+# At the top of each notebook, instead of loading paths manually:
+from src.config import PipelineConfig
+
+# Set YOUR identifier (use your name or a unique run ID)
+cfg = PipelineConfig(run_id="dan")  # or "alex", "run_20250204", etc.
+
+# Access paths
+silver_path = cfg.silver_path
+output_path = cfg.get_output_path("user_info_df")
+# Returns: "dbfs:/FileStore/misc/dan/user_info_df_pullcomplete.parquet"
+
+# Get all output paths at once
+output_paths = cfg.output_paths
+```
+
+### How It Works
+
+1. All output files are namespaced by `run_id` in the path
+2. Input tables (silver/bronze) are shared and read-only
+3. Each user's outputs go to their own folder: `dbfs:/FileStore/misc/{run_id}/`
+
+### Alternative: Set in Config File
+
+You can also set the default `run_id` in `configs/data_paths.yaml`:
+
+```yaml
+# Set this to your name/identifier
+run_id: "dan"
+```
+
+Then just use `PipelineConfig()` without arguments.
+
+---
+
 ## Pipeline Overview
 
 ```
@@ -372,3 +413,45 @@ For high-cardinality columns (many unique values), consider:
 - [ ] Added feature set to `configs/statistical_tests.yaml`
 - [ ] Tested pipeline end-to-end
 - [ ] Updated feature list in YAML after seeing actual values
+
+---
+
+## Configuration Reference
+
+### `PipelineConfig` Class
+
+The `src/config.py` module provides a `PipelineConfig` class for managing paths:
+
+```python
+from src.config import PipelineConfig
+
+# Initialize with your run_id
+cfg = PipelineConfig(run_id="your_name")
+
+# Available properties (read-only, shared):
+cfg.silver_path          # "/mnt/delta/silver/"
+cfg.bronze_path          # "/mnt/delta/bronze/"
+cfg.gold_path            # "/mnt/delta/gold/"
+cfg.project_repository_path
+cfg.tables               # dict of table names
+cfg.filters              # dict of data filters
+
+# Output paths (namespaced by run_id):
+cfg.get_output_path("user_info_df")      # Single path
+cfg.get_output_path("test_results_df")
+cfg.output_paths                          # All paths as dict
+
+# Check current run_id
+print(cfg.run_id)        # "your_name"
+```
+
+### Output Files
+
+| Key | Description |
+|-----|-------------|
+| `user_info_df` | Merged user/task data from Notebook 1 |
+| `user_info_df_post_eda` | Feature-engineered data from Notebook 2 |
+| `test_results_df` | Statistical test results from Notebook 3 |
+| `feature_summary` | Model feature importance from Notebook 4 |
+| `interactions` | SHAP interaction values |
+| `*_control` / `*_exposed` | Stratified analysis outputs |

@@ -1,6 +1,16 @@
 # Data Paths Configuration
 
-# Base paths
+# =============================================================================
+# RUN IDENTIFIER
+# =============================================================================
+# Set this to your name/identifier to avoid conflicts when running simultaneously
+# Example: "dan", "alex", "run_20250204"
+# All output files will be namespaced with this identifier
+run_id: "dan"
+
+# =============================================================================
+# Base paths (input - shared, read-only)
+# =============================================================================
 base_path: "/mnt/delta/"
 bronze_path: "/mnt/delta/bronze/"
 silver_path: "/mnt/delta/silver/"
@@ -18,22 +28,22 @@ tables:
   task: "task"
   stripe_verification: "stripe_verification"
 
-# Output file paths (saved in misc folder)
+# =============================================================================
+# Output file paths (namespaced by run_id)
+# =============================================================================
+# Use {run_id} placeholder - it will be replaced at runtime
+# Example: with run_id="dan", user_info_df becomes:
+#   "dbfs:/FileStore/misc/dan/user_info_df_pullcomplete.parquet"
 output_files:
-  user_info_df: "dbfs:/FileStore/misc/user_info_df_pullcomplete.parquet"
-  user_info_df_post_eda: "dbfs:/FileStore/misc/user_info_df_post_eda.parquet"
-  # wonky_user_counts: "dbfs:/FileStore/misc/wonky_user_counts_pullcomplete.parquet"
-  # wonky_respondent_df: "dbfs:/FileStore/misc/wonky_respondent_df_pullcomplete.parquet"
-  # wonky_respondent_summary: "dbfs:/FileStore/misc/wonky_summary_pullcomplete.parquet"
-  # respondent_features: "dbfs:/FileStore/misc/respondent_features_eda.parquet"
-  # wonky_map: "dbfs:/FileStore/misc/wonky_map.parquet"
-  test_results_df: "dbfs:/FileStore/misc/testing_df.csv"
-  feature_summary: "dbfs:/FileStore/misc/feature_summary.csv"
-  interactions: "dbfs:/FileStore/misc/feature_interactions.csv"
-  feature_summary_control: "dbfs:/FileStore/misc/feature_summary_control.csv"
-  interactions_control: "dbfs:/FileStore/misc/feature_interactions_control.csv"
-  feature_summary_exposed: "dbfs:/FileStore/misc/feature_summary_exposed.csv"
-  interactions_exposed: "dbfs:/FileStore/misc/feature_interactions_exposed.csv"
+  user_info_df: "dbfs:/FileStore/misc/{run_id}/user_info_df_pullcomplete.parquet"
+  user_info_df_post_eda: "dbfs:/FileStore/misc/{run_id}/user_info_df_post_eda.parquet"
+  test_results_df: "dbfs:/FileStore/misc/{run_id}/testing_df.csv"
+  feature_summary: "dbfs:/FileStore/misc/{run_id}/feature_summary.csv"
+  interactions: "dbfs:/FileStore/misc/{run_id}/feature_interactions.csv"
+  feature_summary_control: "dbfs:/FileStore/misc/{run_id}/feature_summary_control.csv"
+  interactions_control: "dbfs:/FileStore/misc/{run_id}/feature_interactions_control.csv"
+  feature_summary_exposed: "dbfs:/FileStore/misc/{run_id}/feature_summary_exposed.csv"
+  interactions_exposed: "dbfs:/FileStore/misc/{run_id}/feature_interactions_exposed.csv"
 
 
 
