@@ -32,7 +32,7 @@ def build_random_forest(
     n_estimators: int = 100,
     max_depth: int = 10,
     max_features: Optional[Any] = None,
-    n_splits: int = 5,
+    n_splits: int = 3,
     do_gridsearch: bool = False,
     param_grid: Optional[Dict] = None,
 ) -> Tuple[Any, pd.DataFrame, Dict, pd.DataFrame]:
@@ -94,7 +94,14 @@ def build_random_forest(
     print(f"\nRunning {n_splits}-fold CV...")
     gkf = GroupKFold(n_splits=n_splits)
 
-    cv_metrics = {"train_r2": [], "test_r2": [], "test_rmse": [], "test_mae": []}
+    cv_metrics = {
+        "train_r2": [],
+        "test_r2": [],
+        "test_rmse": [],
+        "test_mae": [],
+        "train_n": [],
+        "test_n": [],
+    }
     fold_models = []
 
     rf_params = {
@@ -125,9 +132,13 @@ def build_random_forest(
         cv_metrics["test_r2"].append(test_r2)
         cv_metrics["test_rmse"].append(test_rmse)
         cv_metrics["test_mae"].append(test_mae)
+        cv_metrics["train_n"].append(len(train_idx))
+        cv_metrics["test_n"].append(len(test_idx))
 
         print(f"  Fold {fold}: Test R²={test_r2:.4f}, Train R²={train_r2:.4f}")
         print(f"  Fold {fold}: Test RMSE={test_rmse:.4f}, Test MAE={test_mae:.4f}")
+        print(f"  Train N:   {np.mean(cv_metrics['train_n']):,.0f} avg per fold")
+        print(f"  Test N:    {np.mean(cv_metrics['test_n']):,.0f} avg per fold")
 
     # Summary
     print(f"\nCV Summary:")
@@ -289,9 +300,10 @@ def get_shap_contributions(
         }
     )
 
-    contributions["variance_scale"] = ((
-        contributions["abs_contribution"] - contributions["mean_contribution"].abs()
-    ) / contributions["abs_contribution"]).round(2)
+    contributions["variance_scale"] = (
+        (contributions["abs_contribution"] - contributions["mean_contribution"].abs())
+        / contributions["abs_contribution"]
+    ).round(2)
 
     contributions["direction"] = contributions["mean_contribution"].apply(
         lambda x: "↑ increases" if x > 0 else "↓ decreases"
@@ -355,13 +367,15 @@ def create_feature_summary(
         "significant_both",
         "ols_cohens_d",
         "ols_effect_size",
-        'ols_interpretation_short',
-        'odds_ratio',
-        'logit_p_value',
-        'lr_interpretation_short',
+        "ols_interpretation_short",
+        "odds_ratio",
+        "logit_p_value",
+        "lr_interpretation_short",
     ]
     available_cols = [c for c in stats_cols if c in stats_coefficients.columns]
-    summary = summary.merge(stats_coefficients[available_cols], on="feature", how="left")
+    summary = summary.merge(
+        stats_coefficients[available_cols], on="feature", how="left"
+    )
 
     # Merge VIF
     summary = summary.merge(
@@ -369,8 +383,8 @@ def create_feature_summary(
     )
 
     # Formating
-    summary["shap_importance_pct"] = summary["shap_importance_pct"].round(3)/100
-    summary["rf_importance_pct"] = summary["rf_importance_pct"].round(3)/100
+    summary["shap_importance_pct"] = summary["shap_importance_pct"].round(3) / 100
+    summary["rf_importance_pct"] = summary["rf_importance_pct"].round(3) / 100
 
     # Rank by SHAP importance
     summary = summary.sort_values("shap_importance", ascending=False)
